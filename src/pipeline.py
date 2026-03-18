@@ -70,8 +70,8 @@ def create_master_table(
 
     # Merge con trabajos y gastos de persona (nivel persona)
     keys_persona = ['folioviv', 'foliohog', 'numren']
-    trab_proc['folioviv'] = trab_proc['folioviv'].astype(int)
-    gasper_proc['folioviv'] = gasper_proc['folioviv'].astype(int)
+    trab_proc[keys_persona] = trab_proc[keys_persona].astype(int)
+    gasper_proc[keys_persona] = gasper_proc[keys_persona].astype(int)
     master_df = master_df.merge(trab_proc, on=keys_persona, how='left')
     master_df = master_df.merge(gasper_proc, on=keys_persona, how='left')
 
