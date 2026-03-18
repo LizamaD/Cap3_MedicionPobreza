@@ -41,6 +41,7 @@ def create_master_table(
     """
     print("Procesando tablas individuales...")
     pob_keys = pob_keys[['folioviv','foliohog','numren','pobreza','pobreza_e']]
+    pob_keys = pob_keys[~pob_keys['pobreza'].isna()]
     pob_proc = process_poblacion(pob_df)
     viv_proc = process_viviendas(viv_df)
     hog_proc = process_hogares(hog_df)
