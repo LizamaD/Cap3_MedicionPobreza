@@ -52,19 +52,26 @@ def create_master_table(
 
     print("Uniendo tablas en una tabla maestra...")
     # La tabla de población es nuestra base (nivel persona)
+    pob_proc[['folioviv', 'foliohog', 'numren']] = pob_proc[['folioviv', 'foliohog', 'numren']].astype(int)
     master_df = pob_keys.merge(pob_proc, on=['folioviv', 'foliohog', 'numren'], how='left') 
 
     # Merge con viviendas (nivel vivienda)
+    viv_proc['folioviv'] = viv_proc['folioviv'].astype(int)
     master_df = master_df.merge(viv_proc, on='folioviv', how='left')
 
     # Merge con hogares, gastos de hogar e ingresos (nivel hogar)
     keys_hogar = ['folioviv', 'foliohog']
+    hog_df['folioviv'] = hog_df['folioviv'].astype(int)
+    gashog_proc['folioviv'] = gashog_proc['folioviv'].astype(int)
+    ing_proc['folioviv'] = ing_proc['folioviv'].astype(int)
     master_df = master_df.merge(hog_proc, on=keys_hogar, how='left')
     master_df = master_df.merge(gashog_proc, on=keys_hogar, how='left')
     master_df = master_df.merge(ing_proc, on=keys_hogar, how='left')
 
     # Merge con trabajos y gastos de persona (nivel persona)
     keys_persona = ['folioviv', 'foliohog', 'numren']
+    trab_proc['folioviv'] = trab_proc['folioviv'].astype(int)
+    gasper_proc['folioviv'] = gasper_proc['folioviv'].astype(int)
     master_df = master_df.merge(trab_proc, on=keys_persona, how='left')
     master_df = master_df.merge(gasper_proc, on=keys_persona, how='left')
 
