@@ -11,6 +11,7 @@ from src.gastoshogar import procesar_gastos_enigh
 from src.ingresos import generar_ingreso_deflactado_ago2024
 
 def create_master_table(
+    pob_keys: pd.DataFrame,
     pob_df: pd.DataFrame,
     viv_df: pd.DataFrame,
     hog_df: pd.DataFrame,
@@ -25,6 +26,7 @@ def create_master_table(
     sola tabla maestra a nivel persona y la guarda en un archivo CSV.
 
     Args:
+        pobreza_df: DataFrame raw de pobreza.
         pob_df: DataFrame raw de población.
         viv_df: DataFrame raw de viviendas.
         hog_df: DataFrame raw de hogares.
@@ -38,6 +40,7 @@ def create_master_table(
         Un DataFrame maestro con toda la información unificada a nivel persona.
     """
     print("Procesando tablas individuales...")
+    pob_keys = pob_keys[['folioviv','foliohog','numren','pobreza','pobreza_e']]
     pob_proc = process_poblacion(pob_df)
     viv_proc = process_viviendas(viv_df)
     hog_proc = process_hogares(hog_df)
@@ -49,7 +52,7 @@ def create_master_table(
 
     print("Uniendo tablas en una tabla maestra...")
     # La tabla de población es nuestra base (nivel persona)
-    master_df = pob_proc
+    master_df = pob_keys.merge(pob_proc, on=['folioviv', 'foliohog', 'numren'], how='left') 
 
     # Merge con viviendas (nivel vivienda)
     master_df = master_df.merge(viv_proc, on='folioviv', how='left')
