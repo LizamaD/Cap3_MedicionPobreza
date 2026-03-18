@@ -46,9 +46,7 @@ def procesar_gastos_enigh(gastoshogar):
         'gasto_salud': 'sum',
         'gasto_educacion': 'sum',
         'gasto_formal': 'sum',
-        'gasto_tarjeta': 'sum',
-        'factor': 'first',
-        'entidad': 'first'
+        'gasto_tarjeta': 'sum'
     }).reset_index()
 
     # 5. INDICADORES FINALES

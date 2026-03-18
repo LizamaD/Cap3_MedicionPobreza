@@ -3,7 +3,7 @@ import numpy as np
 
 def process_hogares(df):
     # 1. Identificadores y Factores (Obligatorios)
-    identificadores = ['folioviv', 'foliohog', 'factor', 'tot_integ', 'clase_hog']
+    identificadores = ['folioviv', 'foliohog', 'tot_integ', 'clase_hog']
     
     # 2. Seguridad Alimentaria (Para carencia de CONEVAL)
     # Seleccionamos acc_alim 1 al 16

@@ -50,10 +50,7 @@ def procesar_gastos_persona_enigh(gastospersona):
         
         # Contexto de salud (¿Fue en institución pública o privada?)
         # 01: IMSS, 02: ISSSTE, 07: Privado, etc.
-        'inst': lambda x: x.mode()[0] if not x.mode().empty else '00',
-        
-        # Metadatos
-        'factor': 'first'
+        'inst': lambda x: x.mode()[0] if not x.mode().empty else '00'
     }).reset_index()
 
     # 4. INDICADORES DERIVADOS

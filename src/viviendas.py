@@ -8,7 +8,7 @@ def process_viviendas(df):
     df['folioviv'] = df['folioviv'].astype(str).str.zfill(10)
     
     # Columnas numéricas clave
-    cols_num = ['tot_resid', 'cuart_dorm', 'num_cuarto', 'estim_pago', 'factor']
+    cols_num = ['tot_resid', 'cuart_dorm', 'num_cuarto', 'estim_pago']
     for col in cols_num:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -53,7 +53,7 @@ def process_viviendas(df):
         'ratio_hacinamiento', 'ind_hacinamiento',
         'carencia_piso', 'carencia_pared', 'carencia_techo',
         'carencia_agua', 'carencia_drenaje', 'carencia_luz', 'carencia_combustible',
-        'score_vivienda_alta', 'tot_resid', 'tot_hog', 'factor'
+        'score_vivienda_alta', 'tot_resid', 'tot_hog'
     ]
     
     return df[final_columns]
