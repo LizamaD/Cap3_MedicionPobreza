@@ -61,7 +61,7 @@ def create_master_table(
 
     # Merge con hogares, gastos de hogar e ingresos (nivel hogar)
     keys_hogar = ['folioviv', 'foliohog']
-    hog_df['folioviv'] = hog_df['folioviv'].astype(int)
+    hog_proc['folioviv'] = hog_proc['folioviv'].astype(int)
     gashog_proc['folioviv'] = gashog_proc['folioviv'].astype(int)
     ing_proc['folioviv'] = ing_proc['folioviv'].astype(int)
     master_df = master_df.merge(hog_proc, on=keys_hogar, how='left')
