@@ -57,7 +57,11 @@ def process_poblacion(df):
     ]
     for col in affirmative_is_1:
         if col in df.columns:
-            df[col] = np.where(df[col] == '1', 1, 0)
+            # Se convierte a numérico antes de comparar para manejar de forma robusta
+            # los tipos mixtos (int, float, object). Así, 1, 1.0 y '1' se tratan igual.
+            # Los valores no numéricos (errores) o nulos se evaluarán como Falso, resultando en 0.
+            condition = pd.to_numeric(df[col], errors='coerce') == 1
+            df[col] = np.where(condition, 1, 0)
 
     # Caso especial para num_trabaj: 1 si tiene al menos un trabajo, 0 si no.
     if 'num_trabaj' in df.columns:
