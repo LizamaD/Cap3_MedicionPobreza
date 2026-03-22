@@ -19,11 +19,6 @@ def procesar_gastos_persona_enigh(gastospersona):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Normalizamos llaves
-    df['folioviv'] = df['folioviv'].astype(int)
-    df['folioviv'] = df['folioviv'].astype(int)
-    df['numren'] = df['numren'].astype(int)
-
     # 2. FEATURE ENGINEERING: Identificación de rubros clave
     # Educación: Usamos los campos específicos 'inscrip' y 'colegia' 
     # y también la clave (División 10 en COICOP)
@@ -53,6 +48,11 @@ def procesar_gastos_persona_enigh(gastospersona):
         # 01: IMSS, 02: ISSSTE, 07: Privado, etc.
         'inst': lambda x: x.mode()[0] if not x.mode().empty else '00'
     }).reset_index()
+
+    # Normalizamos llaves
+    df['folioviv'] = df['folioviv'].astype(int)
+    df['folioviv'] = df['folioviv'].astype(int)
+    df['numren'] = df['numren'].astype(int)
 
     # 4. INDICADORES DERIVADOS
     persona_gastos['gasto_persona_total'] = persona_gastos['gasto_tri'] + persona_gastos['gas_nm_tri']
