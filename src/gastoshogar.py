@@ -10,7 +10,7 @@ def procesar_gastos_enigh(gastoshogar):
 
     # 1. LIMPIEZA DE TIPOS (El "Blindaje")
     # Columnas que DEBEN ser strings (llaves y códigos)
-    cols_str = ['folioviv', 'foliohog', 'clave', 'lugar_comp', 'forma_pag1', 'tipo_gasto']
+    cols_str = ['clave', 'lugar_comp', 'forma_pag1', 'tipo_gasto']
     for col in cols_str:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
@@ -23,7 +23,7 @@ def procesar_gastos_enigh(gastoshogar):
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # 2. PROCESAMIENTO DE LLAVES
-    df['folioviv'] = df['folioviv'].str.zfill(10)
+    #df['folioviv'] = df['folioviv'].str.zfill(10)
     
     # 3. CREAR CATEGORÍAS (Usando las claves ya limpias como string)
     df['division_gasto'] = df['clave'].str.zfill(6).str[:2]
