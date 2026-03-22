@@ -32,7 +32,7 @@ def process_poblacion(df):
     # B) ACCESO A SALUD (Dummy 1/0)
     # Si tiene cualquier institución de la 1 a la 9 (IMSS, ISSSTE, Bienestar, etc.)
     inst_cols = [f'inst_{i}' for i in range(1, 10)]
-    df['tiene_salud'] = df[inst_cols].apply(lambda x: 1 if '1' in x.values else 0, axis=1)
+    df['tiene_salud'] = df[inst_cols].apply(lambda x: 1 if 1 in x.values else 0, axis=1)
 
     # C) DISCAPACIDAD (Dummy 1/0)
     # Si tiene dificultad mucha o no puede en cualquiera de las dimensiones
