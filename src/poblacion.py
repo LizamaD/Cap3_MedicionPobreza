@@ -6,11 +6,11 @@ def process_poblacion(df):
     df = df.copy()
     
     # Llaves como strings
-    for col in ['folioviv', 'foliohog', 'numren', 'parentesco', 'nivelaprob', 'gradoaprob']:
+    for col in ['parentesco', 'nivelaprob', 'gradoaprob']:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip().str.zfill(2)
     
-    df['folioviv'] = df['folioviv'].str.zfill(10) # Folio viv siempre a 10
+    #df['folioviv'] = df['folioviv'].str.zfill(10) # Folio viv siempre a 10
     
     # Números como números
     cols_num = ['edad', 'hijos_viv', 'hijos_sob', 'factor']

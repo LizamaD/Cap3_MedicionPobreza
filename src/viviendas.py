@@ -5,7 +5,7 @@ def process_viviendas(df):
     df = df.copy()
     
     # 1. BLINDAJE Y LIMPIEZA
-    df['folioviv'] = df['folioviv'].astype(str).str.zfill(10)
+    #df['folioviv'] = df['folioviv'].astype(str).str.zfill(10)
     
     # Reemplazar códigos de "No especificado" específicos de la ENIGH a NaN
     # antes de convertir a numérico. '&' en categóricas, -1 en estim_pago, etc.

@@ -29,8 +29,8 @@ def process_hogares(df):
     # --- TRANSFORMACIONES RÁPIDAS ---
     
     # Limpieza de folios
-    df_filtered['folioviv'] = df_filtered['folioviv'].astype(str).str.zfill(10)
-    df_filtered['foliohog'] = df_filtered['foliohog'].astype(str)
+    #df_filtered['folioviv'] = df_filtered['folioviv'].astype(str).str.zfill(10)
+    #df_filtered['foliohog'] = df_filtered['foliohog'].astype(str)
     
     # Crear un "Índice de Conectividad" (0 a 3)
     # Convertimos a binario (1 si tiene, 0 si no)
