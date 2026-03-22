@@ -9,7 +9,7 @@ def procesar_gastos_persona_enigh(gastospersona):
     df = gastospersona.copy()
 
     # 1. BLINDAJE DE TIPOS (Evitamos el error de concatenación)
-    cols_str = ['folioviv', 'foliohog', 'numren', 'clave', 'inst', 'forma_pag1']
+    cols_str = ['clave', 'inst', 'forma_pag1']
     for col in cols_str:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
@@ -20,8 +20,8 @@ def procesar_gastos_persona_enigh(gastospersona):
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # Normalizamos llaves
-    df['folioviv'] = df['folioviv'].str.zfill(10)
-    df['numren'] = df['numren'].str.zfill(2)
+    #df['folioviv'] = df['folioviv'].str.zfill(10)
+    #df['numren'] = df['numren'].str.zfill(2)
 
     # 2. FEATURE ENGINEERING: Identificación de rubros clave
     # Educación: Usamos los campos específicos 'inscrip' y 'colegia' 
