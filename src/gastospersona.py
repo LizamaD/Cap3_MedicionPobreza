@@ -20,8 +20,9 @@ def procesar_gastos_persona_enigh(gastospersona):
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # Normalizamos llaves
-    #df['folioviv'] = df['folioviv'].str.zfill(10)
-    #df['numren'] = df['numren'].str.zfill(2)
+    df['folioviv'] = df['folioviv'].astype(int)
+    df['folioviv'] = df['folioviv'].astype(int)
+    df['numren'] = df['numren'].astype(int)
 
     # 2. FEATURE ENGINEERING: Identificación de rubros clave
     # Educación: Usamos los campos específicos 'inscrip' y 'colegia' 
