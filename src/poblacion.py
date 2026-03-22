@@ -46,6 +46,24 @@ def process_poblacion(df):
     uso_cols = [f'usotiempo{i}' for i in range(1, 8)]
     df['score_trabajo_domestico'] = df[uso_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
 
+    # E) CONVERSIÓN A VARIABLES DICOTÓMICAS
+    # Se convierten varias columnas a formato binario (1=Sí, 0=No/No especificado)
+    # para facilitar su uso en modelos.
+
+    # Columnas donde el código '1' representa una respuesta afirmativa.
+    affirmative_is_1 = [
+        'afrod', 'hablaind', 'etnia', 'alfabetism',
+        'asis_esc', 'segsoc', 'trabajo_mp'
+    ]
+    for col in affirmative_is_1:
+        if col in df.columns:
+            df[col] = np.where(df[col] == '1', 1, 0)
+
+    # Caso especial para num_trabaj: 1 si tiene al menos un trabajo, 0 si no.
+    if 'num_trabaj' in df.columns:
+        # Se convierte a numérico, los errores/NaN se vuelven 0.
+        # Luego, cualquier valor > 0 se convierte en 1.
+        df['num_trabaj'] = (pd.to_numeric(df['num_trabaj'], errors='coerce').fillna(0) > 0).astype(int)
     # 3. SELECCIÓN FINAL (Las que de verdad mueven la aguja)
     final_columns = [
         'folioviv', 'foliohog', 'numren', 'parentesco', 'edad', 'sexo',
