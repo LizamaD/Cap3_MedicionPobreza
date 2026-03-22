@@ -26,7 +26,7 @@ def create_master_table(
     sola tabla maestra a nivel persona y la guarda en un archivo CSV.
 
     Args:
-        pobreza_df: DataFrame raw de pobreza.
+        pob_keys: DataFrame con las llaves y la variable objetivo de pobreza.
         pob_df: DataFrame raw de población.
         viv_df: DataFrame raw de viviendas.
         hog_df: DataFrame raw de hogares.
@@ -53,26 +53,22 @@ def create_master_table(
 
     print("Uniendo tablas en una tabla maestra...")
     # La tabla de población es nuestra base (nivel persona)
-    pob_proc[['folioviv', 'foliohog', 'numren']] = pob_proc[['folioviv', 'foliohog', 'numren']].astype(int)
+    # Las llaves (folioviv, foliohog, numren) ya vienen procesadas como strings
+    # desde cada función. Es más seguro y consistente hacer el merge con strings
+    # para evitar problemas con ceros a la izquierda.
     master_df = pob_keys.merge(pob_proc, on=['folioviv', 'foliohog', 'numren'], how='left') 
 
     # Merge con viviendas (nivel vivienda)
-    viv_proc['folioviv'] = viv_proc['folioviv'].astype(int)
     master_df = master_df.merge(viv_proc, on='folioviv', how='left')
 
     # Merge con hogares, gastos de hogar e ingresos (nivel hogar)
     keys_hogar = ['folioviv', 'foliohog']
-    hog_proc[keys_hogar] = hog_proc[keys_hogar].astype(int)
-    gashog_proc[keys_hogar] = gashog_proc[keys_hogar].astype(int)
-    ing_proc[keys_hogar] = ing_proc[keys_hogar].astype(int)
     master_df = master_df.merge(hog_proc, on=keys_hogar, how='left')
     master_df = master_df.merge(gashog_proc, on=keys_hogar, how='left')
     master_df = master_df.merge(ing_proc, on=keys_hogar, how='left')
 
     # Merge con trabajos y gastos de persona (nivel persona)
     keys_persona = ['folioviv', 'foliohog', 'numren']
-    trab_proc[keys_persona] = trab_proc[keys_persona].astype(int)
-    gasper_proc[keys_persona] = gasper_proc[keys_persona].astype(int)
     master_df = master_df.merge(trab_proc, on=keys_persona, how='left')
     master_df = master_df.merge(gasper_proc, on=keys_persona, how='left')
 

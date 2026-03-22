@@ -13,7 +13,7 @@ def process_poblacion(df):
     df['folioviv'] = df['folioviv'].str.zfill(10) # Folio viv siempre a 10
     
     # Números como números
-    cols_num = ['edad', 'hijos_viv', 'hijos_sob']
+    cols_num = ['edad', 'hijos_viv', 'hijos_sob', 'factor']
     for col in cols_num:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -52,7 +52,9 @@ def process_poblacion(df):
         'anios_esc', 'alfabetism', 'asis_esc', 
         'tiene_salud', 'segsoc', 'pob_discapacidad',
         'etnia', 'hablaind', 'afrod', 
-        'trabajo_mp', 'num_trabaj', 'score_trabajo_domestico'
+        'trabajo_mp', 'num_trabaj', 'score_trabajo_domestico',
+        'factor'
     ]
     
-    return df[final_columns]
+    # Usar intersection para evitar errores si alguna columna no existe
+    return df[df.columns.intersection(final_columns)]

@@ -7,6 +7,10 @@ def process_viviendas(df):
     # 1. BLINDAJE Y LIMPIEZA
     df['folioviv'] = df['folioviv'].astype(str).str.zfill(10)
     
+    # Reemplazar códigos de "No especificado" específicos de la ENIGH a NaN
+    # antes de convertir a numérico. '&' en categóricas, -1 en estim_pago, etc.
+    df = df.replace({'&': np.nan, '& ': np.nan})
+    
     # Columnas numéricas clave
     cols_num = ['tot_resid', 'cuart_dorm', 'num_cuarto', 'estim_pago']
     for col in cols_num:
@@ -16,7 +20,7 @@ def process_viviendas(df):
     # 2. FEATURE ENGINEERING (Las variables que "venden")
 
     # A) HACINAMIENTO (Ratio de personas por dormitorio)
-    # Evitamos división por cero con np.where
+    # Evitamos división por cero con np.where. Si cuart_dorm es 0, el hacinamiento es el total de residentes.
     df['ratio_hacinamiento'] = np.where(df['cuart_dorm'] > 0, 
                                         df['tot_resid'] / df['cuart_dorm'], 
                                         df['tot_resid']) # Si no hay cuarto, la persona misma es el ratio
