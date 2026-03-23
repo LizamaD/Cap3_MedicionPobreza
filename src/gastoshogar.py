@@ -49,8 +49,21 @@ def procesar_gastos_enigh(gastoshogar):
         'gasto_tarjeta': 'sum'
     }).reset_index()
 
-    # 5. INDICADORES FINALES
-    hogar_gastos['gasto_total'] = hogar_gastos['gasto_tri'] + hogar_gastos['gas_nm_tri']
-    hogar_gastos['pct_gasto_alimentos'] = (hogar_gastos['gasto_alimentos'] / hogar_gastos['gasto_total']).fillna(0)
+    # Corrección de negativos: Asegurar que ingresos por transferencias no sean negativos.
+    # Un valor negativo aquí no tiene sentido para la medición de bienestar.
+    hogar_gastos['imujer_tri'] = hogar_gastos['imujer_tri'].clip(lower=0)
+
+    # 5. RENOMBRAR PARA CLARIDAD EN MERGE
+    hogar_gastos = hogar_gastos.rename(columns={
+        'gasto_tri': 'gasto_hog_tri',
+        'gas_nm_tri': 'gas_hog_nm_tri',
+        'gasto_salud': 'gasto_hog_salud',
+        'gasto_educacion': 'gasto_hog_educ'
+    })
+
+    # 6. INDICADORES FINALES
+    hogar_gastos['gasto_hog_total'] = hogar_gastos['gasto_hog_tri'] + hogar_gastos['gas_hog_nm_tri']
+    # Evitar división por cero si el gasto total es 0
+    hogar_gastos['pct_gasto_alimentos'] = np.where(hogar_gastos['gasto_hog_total'] > 0, hogar_gastos['gasto_alimentos'] / hogar_gastos['gasto_hog_total'], 0)
     
     return hogar_gastos

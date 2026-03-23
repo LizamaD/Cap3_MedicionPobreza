@@ -49,13 +49,13 @@ def procesar_gastos_persona_enigh(gastospersona):
         'inst': lambda x: x.mode()[0] if not x.mode().empty else '00'
     }).reset_index()
 
-    # Normalizamos llaves
-    df['folioviv'] = df['folioviv'].astype(int)
-    df['folioviv'] = df['folioviv'].astype(int)
-    df['numren'] = df['numren'].astype(int)
+    # 4. RENOMBRAR Y CREAR INDICADORES DERIVADOS
+    persona_gastos = persona_gastos.rename(columns={
+        'gasto_tri': 'gasto_per_tri',
+        'gas_nm_tri': 'gas_per_nm_tri'
+    })
 
-    # 4. INDICADORES DERIVADOS
-    persona_gastos['gasto_persona_total'] = persona_gastos['gasto_tri'] + persona_gastos['gas_nm_tri']
+    persona_gastos['gasto_persona_total'] = persona_gastos['gasto_per_tri'] + persona_gastos['gas_per_nm_tri']
     
     # ¿La persona tiene gasto educativo? (Booleano para el modelo)
     persona_gastos['tiene_gasto_educ'] = (persona_gastos['gasto_educ_total'] > 0).astype(int)
