@@ -34,13 +34,20 @@ def process_hogares(df):
     
     # Crear un "Índice de Conectividad" (0 a 3)
     # Convertimos a binario (1 si tiene, 0 si no)
-    for col in ['conex_inte', 'celular', 'tv_paga']:
+    for col in ['telefono', 'conex_inte', 'celular', 'tv_paga']:
         # Se convierte a numérico para la comparación, manejando robustamente int/float/str.
         condition = pd.to_numeric(df_filtered[col], errors='coerce') == 1
         df_filtered[col] = np.where(condition, 1, 0)
 
     df_filtered['indice_conectividad'] = df_filtered['conex_inte'] + df_filtered['celular']
     
+    # Transformación de variables de flujo a dicotómicas
+    flujo_cols_bin = ['autocons', 'regalos', 'transferen', 'remunera']
+    for col in flujo_cols_bin:
+        if col in df_filtered.columns:
+            condition = pd.to_numeric(df_filtered[col], errors='coerce') == 1
+            df_filtered[col] = np.where(condition, 1, 0)
+
     # IAAS (Inseguridad Alimentaria) - Conversión a Dicotómicas
     # Nota: En la base original 1=Sí, 2=No.
     # Convertimos las columnas de seguridad alimentaria a formato dicotómico (1=Sí, 0=No)
