@@ -150,7 +150,7 @@ def prepare_and_split_for_autoencoder(df_imputed: pd.DataFrame, output_dir: str)
     cols_to_process = [col for col in categorical_cols if col in df_processed.columns]
     
     print(f"Convirtiendo {len(cols_to_process)} columnas categóricas a formato dummy...")
-    df_processed = pd.get_dummies(df_processed, columns=cols_to_process, dummy_na=False)
+    df_processed = pd.get_dummies(df_processed, columns=cols_to_process, dummy_na=False, dtype=int)
     
     # La categoría '__MISSING__' creada por la imputación también se convertirá en una columna dummy,
     # lo cual es perfecto porque le dice al modelo que la ausencia de dato es información.
