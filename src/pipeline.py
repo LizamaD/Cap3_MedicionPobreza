@@ -121,3 +121,64 @@ def impute_data(df: pd.DataFrame) -> pd.DataFrame:
     
     print("Imputación completada. El DataFrame ya no tiene valores faltantes.")
     return df_clean
+
+
+def prepare_and_split_for_autoencoder(df_imputed: pd.DataFrame, output_dir: str) -> tuple:
+    """
+    Prepara los datos para el autoencoder: convierte categóricas a dummies,
+    y luego divide el dataset en hogares pobres y no pobres.
+
+    Args:
+        df_imputed: El DataFrame maestro ya imputado.
+        output_dir: El directorio donde se guardarán los archivos CSV.
+
+    Returns:
+        Una tupla con (df_processed, df_pobres, df_no_pobres).
+    """
+    print("\nIniciando preparación y split para el autoencoder...")
+    df_processed = df_imputed.copy()
+
+    # 1. Convertir categóricas a numéricas (One-Hot Encoding)
+    categorical_cols = [
+        'parentesco', 'sexo', 'tipo_viv', 'tenencia', 'class_emp', 'tam_emp', 'tipoact', 
+        'socios', 'soc_nr1', 'soc_nr2', 'soc_resp', 'otra_act', 'tipoact2', 
+        'tipoact3', 'tipoact4', 'lugar', 'conf_pers', 'inst'
+    ]
+    
+    # Nos aseguramos de que solo procesamos las columnas que existen en el DF
+    cols_to_process = [col for col in categorical_cols if col in df_processed.columns]
+    
+    print(f"Convirtiendo {len(cols_to_process)} columnas categóricas a formato dummy...")
+    df_processed = pd.get_dummies(df_processed, columns=cols_to_process, dummy_na=False)
+    
+    # La categoría '__MISSING__' creada por la imputación también se convertirá en una columna dummy,
+    # lo cual es perfecto porque le dice al modelo que la ausencia de dato es información.
+    
+    print(f"El DataFrame ahora tiene {df_processed.shape[1]} columnas después del one-hot encoding.")
+
+    # 2. Guardar el DataFrame procesado completo
+    full_path = f"{output_dir}/full_processed.csv"
+    print(f"Guardando el DataFrame procesado completo en '{full_path}'...")
+    df_processed.to_csv(full_path, index=False)
+
+    # 3. Hacer el split entre pobres y no pobres
+    # Usamos la variable 'pobreza' que viene desde el inicio (1=Pobre, 0=No Pobre)
+    print("Realizando el split entre hogares pobres y no pobres...")
+    df_pobres = df_processed[df_processed['pobreza'] == 1].copy()
+    df_no_pobres = df_processed[df_processed['pobreza'] == 0].copy()
+
+    print(f"  - Encontrados {len(df_pobres)} registros de personas en pobreza.")
+    print(f"  - Encontrados {len(df_no_pobres)} registros de personas no pobres.")
+
+    # 4. Guardar los DataFrames del split
+    pobres_path = f"{output_dir}/pobres.csv"
+    no_pobres_path = f"{output_dir}/no_pobres.csv"
+    
+    print(f"Guardando el set de pobres en '{pobres_path}'...")
+    df_pobres.to_csv(pobres_path, index=False)
+    
+    print(f"Guardando el set de no pobres en '{no_pobres_path}'...")
+    df_no_pobres.to_csv(no_pobres_path, index=False)
+
+    print("Proceso completado. ¡Archivos listos para el modelado!")
+    return df_processed, df_pobres, df_no_pobres
