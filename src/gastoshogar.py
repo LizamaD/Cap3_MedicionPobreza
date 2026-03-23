@@ -9,15 +9,18 @@ def procesar_gastos_enigh(gastoshogar):
     df = gastoshogar.copy()
 
     # 1. LIMPIEZA DE TIPOS (El "Blindaje")
-    # Columnas que DEBEN ser strings (llaves y códigos)
-    cols_str = ['clave', 'lugar_comp', 'forma_pag1', 'tipo_gasto']
-    for col in cols_str:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+    # Columnas de código que deben ser strings
+    # 'clave' se rellena a 6 dígitos, 'tipo_gasto' es un string como 'G1'
+    if 'clave' in df.columns:
+        df['clave'] = df['clave'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
+    if 'tipo_gasto' in df.columns:
+        df['tipo_gasto'] = df['tipo_gasto'].astype(str).str.strip()
 
     # Columnas que DEBEN ser números (gastos y factores)
     # errors='coerce' convertirá cualquier cosa rara (como '&' o espacios) en NaN
-    cols_num = ['gasto_tri', 'gasto_nm', 'gas_nm_tri', 'imujer_tri', 'gasto', 'factor']
+    # Incluimos lugar_comp y forma_pag1 ya que son códigos numéricos.
+    cols_num = ['gasto_tri', 'gasto_nm', 'gas_nm_tri', 'imujer_tri', 'gasto', 'factor',
+                'lugar_comp', 'forma_pag1']
     for col in cols_num:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -26,7 +29,7 @@ def procesar_gastos_enigh(gastoshogar):
     #df['folioviv'] = df['folioviv'].str.zfill(10)
     
     # 3. CREAR CATEGORÍAS (Usando las claves ya limpias como string)
-    df['division_gasto'] = df['clave'].str.zfill(6).str[:2]
+    df['division_gasto'] = df['clave'].str[:2]
     
     # Gasto en Alimentos (División 01), Salud (06), Educación (10)
     df['gasto_alimentos'] = np.where(df['division_gasto'] == '01', df['gasto_tri'] + df['gas_nm_tri'], 0)
@@ -34,8 +37,10 @@ def procesar_gastos_enigh(gastoshogar):
     df['gasto_educacion'] = np.where(df['division_gasto'] == '10', df['gasto_tri'] + df['gas_nm_tri'], 0)
     
     # Canales de compra y formas de pago
-    df['gasto_formal'] = np.where(df['lugar_comp'].isin(['06', '07', '08']), df['gasto_tri'], 0)
-    df['gasto_tarjeta'] = np.where(df['forma_pag1'].isin(['02', '03']), df['gasto_tri'], 0)
+    # Se usan condiciones numéricas, que son más robustas al tipo de dato de origen.
+    # 6: Supermercado, 7: Tienda departamental, 8: Tienda especializada
+    df['gasto_formal'] = np.where(df['lugar_comp'].isin([6, 7, 8]), df['gasto_tri'], 0)
+    df['gasto_tarjeta'] = np.where(df['forma_pag1'].isin([2, 3]), df['gasto_tri'], 0)
 
     # 4. AGREGACIÓN (Ahora sí, sin errores de tipo)
     hogar_gastos = df.groupby(['folioviv', 'foliohog']).agg({
