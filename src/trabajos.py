@@ -2,6 +2,11 @@ import pandas as pd
 import numpy as np
 
 def process_trabajos(df):
+    df = df.copy()
+    # Reemplazar strings en blanco o con espacios por NaN para unificar valores faltantes.
+    # Esto soluciona el problema de tener la categoría ' ' en la tabla final.
+    df = df.replace(r'^\s*$', np.nan, regex=True)
+
     keys = ['folioviv', 'foliohog', 'numren']
 
     trabajo_cols = ['trapais', 'subor', 'indep', 'personal', 'pago', 'contrato', 'tipocontr']
@@ -54,5 +59,11 @@ def process_trabajos(df):
         # 1 si no recibe ingresos, 0 en cualquier otro caso (sí recibe, no aplica, no especificado)
         condition = pd.to_numeric(df_final['no_ing'], errors='coerce') == 1
         df_final['no_ing'] = np.where(condition, 1, 0)
+
+    # Convertir 'tiene_suel' a una variable dicotómica
+    if 'tiene_suel' in df_final.columns:
+        # 1 si tiene sueldo, 0 en otro caso (no tiene, no aplica, no especificado)
+        condition = pd.to_numeric(df_final['tiene_suel'], errors='coerce') == 1
+        df_final['tiene_suel'] = np.where(condition, 1, 0)
 
     return df_final
