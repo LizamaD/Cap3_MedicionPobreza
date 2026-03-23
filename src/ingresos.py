@@ -121,6 +121,12 @@ def generar_ingreso_deflactado_ago2024(trabajo_df: pd.DataFrame,
 
     df['ing_mens'] = df[['ing_1', 'ing_2', 'ing_3', 'ing_4', 'ing_5', 'ing_6']].mean(axis=1, skipna=True)
 
+    # Corrección: Asegurar que no haya ingresos negativos.
+    # Un ingreso negativo en una transferencia no tiene sentido para medir bienestar.
+    # Se asume que el valor mínimo es 0 (no se recibió nada o se devolvió dinero, pero no se cuenta como ingreso negativo).
+    # Esto también maneja los NaNs que puedan resultar del .mean() si todas las entradas son NaN.
+    df['ing_mens'] = df['ing_mens'].clip(lower=0).fillna(0)
+
     # -----------------------------
     # 6. Clasificación de ingresos
     # -----------------------------
