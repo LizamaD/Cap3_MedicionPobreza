@@ -14,6 +14,11 @@ def procesar_gastos_persona_enigh(gastospersona):
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
 
+    # Limpieza específica para 'inst' antes de agregar para arreglar el "cochinero"
+    if 'inst' in df.columns:
+        # Unificar todos los valores que significan "faltante" (strings vacíos, 'nan') a np.nan real
+        df['inst'] = df['inst'].replace(['', 'nan'], np.nan)
+
     cols_num = ['gasto_tri', 'gas_nm_tri', 'inscrip', 'colegia', 'gasto', 'factor']
     for col in cols_num:
         if col in df.columns:
