@@ -43,4 +43,16 @@ def process_trabajos(df):
     df_final = agrupado.merge(empleo_principal, on=keys, how='left')
     df_final['htrab'] = df_final['htrab'].fillna(0).astype(int)
 
+    # Convertir variables categóricas a string para que los modelos no las traten como numéricas
+    for col in ['class_emp', 'tam_emp', 'tipoact']:
+        if col in df_final.columns:
+            # Rellenar NaNs (de personas sin trabajo principal) y convertir a string
+            df_final[col] = df_final[col].fillna(0).astype(int).astype(str)
+
+    # Convertir 'no_ing' a una variable dicotómica
+    if 'no_ing' in df_final.columns:
+        # 1 si no recibe ingresos, 0 en cualquier otro caso (sí recibe, no aplica, no especificado)
+        condition = pd.to_numeric(df_final['no_ing'], errors='coerce') == 1
+        df_final['no_ing'] = np.where(condition, 1, 0)
+
     return df_final
