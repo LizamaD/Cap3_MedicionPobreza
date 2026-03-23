@@ -39,14 +39,15 @@ def process_hogares(df):
     
     df_filtered['indice_conectividad'] = df_filtered['conex_inte'] + df_filtered['celular']
     
-    # IAAS Score (Suma de carencias alimentarias donde 1 es "Sí")
+    # IAAS (Inseguridad Alimentaria) - Conversión a Dicotómicas
     # Nota: En la base original 1=Sí, 2=No.
+    # Convertimos las columnas de seguridad alimentaria a formato dicotómico (1=Sí, 0=No)
     for col in alim_cols:
         if col in df_filtered.columns:
-            df_filtered[f'{col}_bin'] = np.where(df_filtered[col] == '1', 1, 0)
+            df_filtered[col] = np.where(df_filtered[col] == '1', 1, 0)
             
-    # Creamos el score total de inseguridad alimentaria
-    bin_cols = [c for c in df_filtered.columns if '_bin' in c]
-    df_filtered['score_iaas'] = df_filtered[bin_cols].sum(axis=1)
+    # Creamos el score total de inseguridad alimentaria sumando las columnas ya procesadas
+    existing_alim_cols = [c for c in alim_cols if c in df_filtered.columns]
+    df_filtered['score_iaas'] = df_filtered[existing_alim_cols].sum(axis=1)
     
     return df_filtered
