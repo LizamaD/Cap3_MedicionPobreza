@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from sklearn.feature_selection import VarianceThreshold
 
 # Importar todas las funciones de procesamiento de los otros módulos
 from src.poblacion import process_poblacion
@@ -155,13 +156,43 @@ def prepare_and_split_for_autoencoder(df_imputed: pd.DataFrame, output_dir: str)
     # lo cual es perfecto porque le dice al modelo que la ausencia de dato es información.
     
     print(f"El DataFrame ahora tiene {df_processed.shape[1]} columnas después del one-hot encoding.")
+    
+    # 2. Eliminar columnas con baja varianza
+    print("\nAplicando filtro de baja varianza...")
+    
+    # Separar las columnas que no son features para no eliminarlas
+    non_features = ['folioviv', 'foliohog', 'numren', 'pobreza', 'pobreza_e', 'factor']
+    feature_cols = [col for col in df_processed.columns if col not in non_features]
+    features_df = df_processed[feature_cols]
 
-    # 2. Guardar el DataFrame procesado completo
+    # Este umbral elimina variables que tienen el mismo valor en más del 99% de los casos
+    selector = VarianceThreshold(threshold=(.99 * (1 - .99)))
+    selector.fit(features_df)
+
+    # Obtener las columnas que se quedan y las que se van
+    kept_features = features_df.columns[selector.get_support()].tolist()
+    dropped_features = features_df.columns[~selector.get_support()].tolist()
+
+    print(f"Dimensión original de features: {features_df.shape[1]}")
+    print(f"Variables eliminadas por baja varianza: {len(dropped_features)}")
+    print(f"Variables que quedaron: {len(kept_features)}")
+
+    if dropped_features:
+        print("\nColumnas eliminadas:")
+        # Imprimir en un formato más legible si son muchas
+        for i in range(0, len(dropped_features), 5):
+             print("  ", dropped_features[i:i+5])
+
+    # Reconstruir el DataFrame con solo las columnas de alta varianza + las no-features
+    df_processed = df_processed[non_features + kept_features]
+    print(f"\nDimensión final del DataFrame procesado: {df_processed.shape[1]} columnas.")
+
+    # 3. Guardar el DataFrame procesado completo
     full_path = f"{output_dir}/full_processed.csv"
     print(f"Guardando el DataFrame procesado completo en '{full_path}'...")
     df_processed.to_csv(full_path, index=False)
 
-    # 3. Hacer el split entre pobres y no pobres
+    # 4. Hacer el split entre pobres y no pobres
     # Usamos la variable 'pobreza' que viene desde el inicio (1=Pobre, 0=No Pobre)
     print("Realizando el split entre hogares pobres y no pobres...")
     df_pobres = df_processed[df_processed['pobreza'] == 1].copy()
@@ -170,7 +201,7 @@ def prepare_and_split_for_autoencoder(df_imputed: pd.DataFrame, output_dir: str)
     print(f"  - Encontrados {len(df_pobres)} registros de personas en pobreza.")
     print(f"  - Encontrados {len(df_no_pobres)} registros de personas no pobres.")
 
-    # 4. Guardar los DataFrames del split
+    # 5. Guardar los DataFrames del split
     pobres_path = f"{output_dir}/pobres.csv"
     no_pobres_path = f"{output_dir}/no_pobres.csv"
     
