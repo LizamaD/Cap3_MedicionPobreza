@@ -139,8 +139,8 @@ if __name__ == "__main__":
     # Optuna llamará a la función 'objective' 50 veces, probando diferentes combinaciones
     study.optimize(
         lambda trial: objective(trial, X_train_scaled, w_train, X_val_scaled, w_val),
-        n_trials=50,  # Aumenta este número para una búsqueda más exhaustiva (ej. 100)
-        n_jobs=1      # Usar -1 para paralelizar si tu CPU lo permite, pero en Colab con GPU es mejor 1
+        n_trials=100,  # Aumenta este número para una búsqueda más exhaustiva (ej. 100)
+        n_jobs=-1      # Usar -1 para paralelizar si tu CPU lo permite, pero en Colab con GPU es mejor 1
     )
 
     # --- 6. Resultados ---
