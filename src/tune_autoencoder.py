@@ -27,14 +27,14 @@ def create_autoencoder(trial, input_shape):
         layer_units.append(trial.suggest_int(f'units_layer_{i}', 64, 256))
         
     # --- Construcción Dinámica del Modelo ---
-    input_layer = layers.Input(shape=(input_shape,))
+    input_layer = layers.Input(shape=(input_shape,), name='input_layer')
     x = input_layer
 
     # Encoder dinámico
     # Usamos los parámetros pre-sugeridos, construyendo solo `n_layers`
     for i in range(n_layers):
-        x = layers.Dense(layer_units[i], activation='relu')(x)
-        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dense(layer_units[i], activation='relu', name=f'encoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'encoder_dropout_{i}')(x)
 
     # Bottleneck (Espacio latente)
     bottleneck = layers.Dense(bottleneck_dim, activation='relu', name='latent_space')(x)
@@ -42,11 +42,11 @@ def create_autoencoder(trial, input_shape):
     # Decoder dinámico (Espejo del encoder)
     x = bottleneck
     for i in reversed(range(n_layers)):
-        x = layers.Dense(layer_units[i], activation='relu')(x)
+        x = layers.Dense(layer_units[i], activation='relu', name=f'decoder_dense_{i}')(x)
         # Mejora: Añadir dropout también en el decoder para tener simetría y mejor regularización.
-        x = layers.Dropout(dropout_rate)(x)
+        x = layers.Dropout(dropout_rate, name=f'decoder_dropout_{i}')(x)
 
-    output_layer = layers.Dense(input_shape, activation='sigmoid')(x)
+    output_layer = layers.Dense(input_shape, activation='sigmoid', name='output_layer')(x)
 
     autoencoder = models.Model(inputs=input_layer, outputs=output_layer)
     autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss='mse')
