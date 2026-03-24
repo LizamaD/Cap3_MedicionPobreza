@@ -16,17 +16,24 @@ def create_autoencoder(trial, input_shape):
     n_layers = trial.suggest_int('n_layers', 1, 3)
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
     dropout_rate = trial.suggest_float('dropout', 0.0, 0.4)
-
+    
+    # --- Sugerir parámetros para un número máximo de capas ---
+    # Esto estabiliza el espacio de búsqueda de Optuna. Al definir siempre
+    # los parámetros para el máximo de capas posibles, evitamos errores cuando
+    # `n_layers` cambia entre "trials", lo que podía generar un espacio de búsqueda inconsistente.
+    layer_units = []
+    max_layers = 3 # Debe coincidir con el máximo de 'n_layers'
+    for i in range(max_layers):
+        layer_units.append(trial.suggest_int(f'units_layer_{i}', 64, 256))
+        
     # --- Construcción Dinámica del Modelo ---
     input_layer = layers.Input(shape=(input_shape,))
     x = input_layer
 
     # Encoder dinámico
-    encoder_layers = []
+    # Usamos los parámetros pre-sugeridos, construyendo solo `n_layers`
     for i in range(n_layers):
-        units = trial.suggest_int(f'units_layer_{i}', 64, 256)
-        encoder_layers.append(layers.Dense(units, activation='relu'))
-        x = encoder_layers[-1](x)
+        x = layers.Dense(layer_units[i], activation='relu')(x)
         x = layers.Dropout(dropout_rate)(x)
 
     # Bottleneck (Espacio latente)
@@ -35,8 +42,9 @@ def create_autoencoder(trial, input_shape):
     # Decoder dinámico (Espejo del encoder)
     x = bottleneck
     for i in reversed(range(n_layers)):
-        # Reusamos la misma estructura de capas para simetría
-        x = layers.Dense(encoder_layers[i].units, activation='relu')(x)
+        x = layers.Dense(layer_units[i], activation='relu')(x)
+        # Mejora: Añadir dropout también en el decoder para tener simetría y mejor regularización.
+        x = layers.Dropout(dropout_rate)(x)
 
     output_layer = layers.Dense(input_shape, activation='sigmoid')(x)
 
