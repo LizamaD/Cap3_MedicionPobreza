@@ -12,8 +12,9 @@ def create_autoencoder(trial, input_shape):
     Construye dinámicamente un modelo de autoencoder basado en los hiperparámetros de Optuna.
     """
     # --- Espacio de búsqueda de hiperparámetros ---
-    bottleneck_dim = trial.suggest_int('bottleneck_dim', 8, 64)
-    n_layers = trial.suggest_int('n_layers', 1, 3)
+    # Forzamos un bottleneck más pequeño y exploramos redes más profundas.
+    bottleneck_dim = trial.suggest_int('bottleneck_dim', 4, 16)
+    n_layers = trial.suggest_int('n_layers', 1, 5) # Aumentamos el máximo a 5
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
     dropout_rate = trial.suggest_float('dropout', 0.0, 0.4)
     
@@ -22,9 +23,16 @@ def create_autoencoder(trial, input_shape):
     # los parámetros para el máximo de capas posibles, evitamos errores cuando
     # `n_layers` cambia entre "trials", lo que podía generar un espacio de búsqueda inconsistente.
     layer_units = []
-    max_layers = 3 # Debe coincidir con el máximo de 'n_layers'
+    max_layers = 5 # Debe coincidir con el máximo de 'n_layers'
+    
+    # Forzamos una estructura de embudo: cada capa es más pequeña que la anterior.
+    last_units = 512 # Un valor inicial alto
     for i in range(max_layers):
-        layer_units.append(trial.suggest_int(f'units_layer_{i}', 64, 256))
+        # CORRECCIÓN: Solo sugerimos y añadimos las unidades una vez por capa.
+        # El límite superior 'last_units' fuerza la estructura de embudo.
+        units = trial.suggest_int(f'units_layer_{i}', 32, last_units)
+        layer_units.append(units)
+        last_units = units # La siguiente capa debe ser más pequeña que esta
         
     # --- Construcción Dinámica del Modelo ---
     input_layer = layers.Input(shape=(input_shape,), name='input_layer')
