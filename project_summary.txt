@@ -1,0 +1,2533 @@
+# Resumen del Proyecto: Medición de Pobreza con Autoencoders
+
+Este proyecto utiliza un modelo de machine learning, específicamente un Autoencoder construido con TensorFlow/Keras, para analizar y caracterizar la pobreza en base a los datos de la Encuesta Nacional de Ingresos y Gastos de los Hogares (ENIGH).
+
+El enfoque metodológico consiste en entrenar el autoencoder exclusivamente con datos de hogares clasificados como "no pobres". Una vez entrenado, el modelo se utiliza para analizar los datos de los hogares "pobres". La métrica clave es el **error de reconstrucción**: un error alto sugiere que las características de un hogar pobre se desvían significativamente de los patrones de "normalidad" (no pobreza) que el modelo aprendió.
+
+Este error de reconstrucción permite identificar no solo la existencia de pobreza, sino también las dimensiones o variables que más contribuyen a que un hogar sea "anómalo" o diferente al estándar de no pobreza.
+
+---
+
+# Data Utilizada
+
+La fuente de datos principal es la **Encuesta Nacional de Ingresos y Gastos de los Hogares (ENIGH)**, levantada por el INEGI en México. Esta encuesta es la fuente oficial para la medición de la pobreza multidimensional que realiza el CONEVAL.
+
+Se utilizan múltiples tablas de la encuesta, entre las que destacan:
+- **Población**: Características sociodemográficas de cada integrante del hogar.
+- **Viviendas**: Calidad de la vivienda, materiales y servicios básicos.
+- **Hogares**: Equipamiento del hogar, estructura y programas sociales.
+- **Ingresos**: Ingresos monetarios y no monetarios de los integrantes.
+- **Gastos**: Gastos en diferentes rubros (alimentos, salud, educación, etc.).
+- **Trabajos**: Características de los empleos de las personas.
+
+Para la variable objetivo (clasificación de pobreza), se utiliza la base de datos oficial de **Medición de Pobreza del CONEVAL**, que ya contiene el indicador de si una persona se encuentra en situación de pobreza o no.
+
+---
+
+# Organización del Repositorio
+
+- **/data**: Contiene los datasets.
+  - **/data/raw**: CSVs originales de la ENIGH.
+  - **/data/processed**: Datasets limpios, unidos y listos para el modelo.
+- **/src**: Código fuente principal en Python.
+  - `pipeline.py`: Orquesta todo el flujo de procesamiento de datos.
+  - `train_final_model.py`: Entrena el modelo final con los datos de "no pobres".
+  - `tune_autoencoder.py`: Script para optimización de hiperparámetros con Optuna.
+  - Otros `.py`: Módulos para procesar cada tabla específica de la ENIGH (poblacion.py, viviendas.py, etc.).
+- **/notebooks**: Jupyter Notebooks para ejecución y experimentación.
+  - `app.ipynb`: Notebook principal para correr el pipeline de datos.
+  - `experimentos.ipynb`: Notebook para experimentación y tuning.
+  - `resultados.ipynb`: Notebook para analizar los resultados del modelo.
+- **/results**: Almacena los artefactos generados por el modelo.
+  - `autoencoder_final.keras`: El modelo entrenado.
+  - `scaler_final.joblib`: El escalador de datos utilizado.
+- `requirements.txt`: Dependencias de Python del proyecto.
+
+---
+# Orden de Ejecución
+
+El proyecto se ejecuta en varias etapas, principalmente orquestadas desde los notebooks:
+
+1.  **Instalación de Dependencias**: Se instalan las librerías necesarias ejecutando `pip install -r requirements.txt`.
+2.  **Procesamiento de Datos (`notebooks/app.ipynb`)**:
+    *   Se cargan todos los CSVs crudos de la ENIGH.
+    *   Se ejecutan las funciones de los módulos en `src` para limpiar y transformar cada tabla.
+    *   Se unen todas las tablas procesadas en una `master_table`.
+    *   Se imputan los valores faltantes.
+    *   Se convierten las variables categóricas a formato numérico (one-hot encoding) y se aplica un filtro de baja varianza.
+    *   Finalmente, el dataset se divide en `pobres.csv` y `no_pobres.csv` y se guarda en `/data/processed`.
+3.  **Tuning del Modelo (`notebooks/experimentos.ipynb`)**:
+    *   Se carga el dataset `no_pobres.csv`.
+    *   Se utiliza la librería **Optuna** para buscar la mejor combinación de hiperparámetros (número de capas, neuronas, learning rate, etc.) para el autoencoder.
+    *   Los resultados del estudio de tuning se guardan.
+4.  **Entrenamiento del Modelo Final (`notebooks/experimentos.ipynb` o `src/train_final_model.py`)**:
+    *   Usando los mejores hiperparámetros encontrados por Optuna, se crea la arquitectura final del autoencoder.
+    *   Se entrena el modelo con la **totalidad** de los datos de `no_pobres.csv`.
+    *   El modelo final (`autoencoder_final.keras`) y el escalador de datos (`scaler_final.joblib`) se guardan en la carpeta `/results`.
+5.  **Análisis de Resultados (`notebooks/resultados.ipynb`)**:
+    *   Se cargan el modelo y el escalador guardados.
+    *   Se carga el dataset `pobres.csv`.
+    *   Se pasan los datos de los pobres a través del autoencoder para calcular el **error de reconstrucción**.
+    *   Se utiliza la librería **SHAP** para interpretar el modelo y descubrir qué variables contribuyen más al error de reconstrucción, revelando así las "nuevas dimensiones" de la pobreza.
+
+---
+# Código del Proyecto
+---
+
+======================================================================
+--- Archivo: requirements.txt
+======================================================================
+pandas
+numpy
+tensorflow
+scikit-learn
+optuna
+plotly
+
+======================================================================
+--- Archivo: .gitignore
+======================================================================
+data/
+
+======================================================================
+--- Archivo: src/__init__.py
+======================================================================
+
+
+======================================================================
+--- Archivo: src/gastoshogar.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def procesar_gastos_enigh(gastoshogar):
+    """
+    Versión blindada: Convierte tipos de datos antes de procesar 
+    para evitar el TypeError de concatenación.
+    """
+    df = gastoshogar.copy()
+
+    # 1. LIMPIEZA DE TIPOS (El "Blindaje")
+    # Columnas de código que deben ser strings
+    # 'clave' se rellena a 6 dígitos, 'tipo_gasto' es un string como 'G1'
+    if 'clave' in df.columns:
+        df['clave'] = df['clave'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
+    if 'tipo_gasto' in df.columns:
+        df['tipo_gasto'] = df['tipo_gasto'].astype(str).str.strip()
+
+    # Columnas que DEBEN ser números (gastos y factores)
+    # errors='coerce' convertirá cualquier cosa rara (como '&' o espacios) en NaN
+    # Incluimos lugar_comp y forma_pag1 ya que son códigos numéricos.
+    cols_num = ['gasto_tri', 'gasto_nm', 'gas_nm_tri', 'imujer_tri', 'gasto', 'factor',
+                'lugar_comp', 'forma_pag1']
+    for col in cols_num:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 2. PROCESAMIENTO DE LLAVES
+    #df['folioviv'] = df['folioviv'].str.zfill(10)
+    
+    # 3. CREAR CATEGORÍAS (Usando las claves ya limpias como string)
+    df['division_gasto'] = df['clave'].str[:2]
+    
+    # Gasto en Alimentos (División 01), Salud (06), Educación (10)
+    df['gasto_alimentos'] = np.where(df['division_gasto'] == '01', df['gasto_tri'] + df['gas_nm_tri'], 0)
+    df['gasto_salud'] = np.where(df['division_gasto'] == '06', df['gasto_tri'] + df['gas_nm_tri'], 0)
+    df['gasto_educacion'] = np.where(df['division_gasto'] == '10', df['gasto_tri'] + df['gas_nm_tri'], 0)
+    
+    # Canales de compra y formas de pago
+    # Se usan condiciones numéricas, que son más robustas al tipo de dato de origen.
+    # 6: Supermercado, 7: Tienda departamental, 8: Tienda especializada
+    df['gasto_formal'] = np.where(df['lugar_comp'].isin([6, 7, 8]), df['gasto_tri'], 0)
+    df['gasto_tarjeta'] = np.where(df['forma_pag1'].isin([2, 3]), df['gasto_tri'], 0)
+
+    # 4. AGREGACIÓN (Ahora sí, sin errores de tipo)
+    hogar_gastos = df.groupby(['folioviv', 'foliohog']).agg({
+        'gasto_tri': 'sum',
+        'gas_nm_tri': 'sum',
+        'imujer_tri': 'sum',
+        'gasto_alimentos': 'sum',
+        'gasto_salud': 'sum',
+        'gasto_educacion': 'sum',
+        'gasto_formal': 'sum',
+        'gasto_tarjeta': 'sum'
+    }).reset_index()
+
+    # Corrección de negativos: Asegurar que ingresos por transferencias no sean negativos.
+    # Un valor negativo aquí no tiene sentido para la medición de bienestar.
+    hogar_gastos['imujer_tri'] = hogar_gastos['imujer_tri'].clip(lower=0)
+
+    # 5. RENOMBRAR PARA CLARIDAD EN MERGE
+    hogar_gastos = hogar_gastos.rename(columns={
+        'gasto_tri': 'gasto_hog_tri',
+        'gas_nm_tri': 'gas_hog_nm_tri',
+        'gasto_salud': 'gasto_hog_salud',
+        'gasto_educacion': 'gasto_hog_educ'
+    })
+
+    # 6. INDICADORES FINALES
+    hogar_gastos['gasto_hog_total'] = hogar_gastos['gasto_hog_tri'] + hogar_gastos['gas_hog_nm_tri']
+    # Evitar división por cero si el gasto total es 0
+    hogar_gastos['pct_gasto_alimentos'] = np.where(hogar_gastos['gasto_hog_total'] > 0, hogar_gastos['gasto_alimentos'] / hogar_gastos['gasto_hog_total'], 0)
+    
+    return hogar_gastos
+
+======================================================================
+--- Archivo: src/gastospersona.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def procesar_gastos_persona_enigh(gastospersona):
+    """
+    Procesa la tabla GASTOSPERSONA a nivel individual.
+    Ideal para modelos de pobreza multidimensional (Educación y Salud).
+    """
+    df = gastospersona.copy()
+
+    # 1. BLINDAJE DE TIPOS (Evitamos el error de concatenación)
+    cols_str = ['clave', 'inst', 'forma_pag1']
+    for col in cols_str:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+
+    # Limpieza específica para 'inst' antes de agregar para arreglar el "cochinero"
+    if 'inst' in df.columns:
+        # Unificar todos los valores que significan "faltante" (strings vacíos, 'nan') a np.nan real
+        df['inst'] = df['inst'].replace(['', 'nan'], np.nan)
+
+    cols_num = ['gasto_tri', 'gas_nm_tri', 'inscrip', 'colegia', 'gasto', 'factor']
+    for col in cols_num:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 2. FEATURE ENGINEERING: Identificación de rubros clave
+    # Educación: Usamos los campos específicos 'inscrip' y 'colegia' 
+    # y también la clave (División 10 en COICOP)
+    df['div_gasto'] = df['clave'].str.zfill(6).str[:2]
+    
+    # Gasto total en educación para esa persona (trimestralizado)
+    # Nota: inscrip y colegia ya suelen estar incluidos en gasto_tri, 
+    # pero aquí los aislamos para ver el peso del costo educativo.
+    df['gasto_educ_total'] = np.where(df['div_gasto'] == '10', df['gasto_tri'] + df['gas_nm_tri'], 0)
+    
+    # Gasto en Salud individual (División 06)
+    df['gasto_salud_ind'] = np.where(df['div_gasto'] == '06', df['gasto_tri'] + df['gas_nm_tri'], 0)
+
+    # 3. AGREGACIÓN A NIVEL PERSONA (folioviv + foliohog + numren)
+    persona_gastos = df.groupby(['folioviv', 'foliohog', 'numren']).agg({
+        # Totales trimestrales
+        'gasto_tri': 'sum',      # Gasto monetario de la persona
+        'gas_nm_tri': 'sum',     # Gasto no monetario (becas en especie, regalos)
+        
+        # Educación y Salud (Crucial para pobreza)
+        'gasto_educ_total': 'sum',
+        'gasto_salud_ind': 'sum',
+        'inscrip': 'sum',        # Monto específico de inscripciones
+        'colegia': 'sum',        # Monto específico de colegiaturas
+        
+        # Contexto de salud (¿Fue en institución pública o privada?)
+        # 01: IMSS, 02: ISSSTE, 07: Privado, etc.
+        'inst': lambda x: x.mode()[0] if not x.mode().empty else '00'
+    }).reset_index()
+
+    # 4. RENOMBRAR Y CREAR INDICADORES DERIVADOS
+    persona_gastos = persona_gastos.rename(columns={
+        'gasto_tri': 'gasto_per_tri',
+        'gas_nm_tri': 'gas_per_nm_tri'
+    })
+
+    persona_gastos['gasto_persona_total'] = persona_gastos['gasto_per_tri'] + persona_gastos['gas_per_nm_tri']
+    
+    # ¿La persona tiene gasto educativo? (Booleano para el modelo)
+    persona_gastos['tiene_gasto_educ'] = (persona_gastos['gasto_educ_total'] > 0).astype(int)
+    
+    return persona_gastos
+
+======================================================================
+--- Archivo: src/hogares.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def process_hogares(df):
+    # 1. Identificadores y Factores (Obligatorios)
+    identificadores = ['folioviv', 'foliohog', 'tot_integ', 'clase_hog']
+    
+    # 2. Seguridad Alimentaria (Para carencia de CONEVAL)
+    # Seleccionamos acc_alim 1 al 16
+    alim_cols = [f'acc_alim{i}' for i in range(1, 17)] + [f'alim17_{i}' for i in range(1, 13)] + ['acc_alim18']
+    
+    # 3. Equipamiento (Solo el "Número de", quitamos los "años")
+    equipamiento = [
+        'num_auto', 'num_van', 'num_pick', 'num_moto', 'num_compu', 'num_lap', 
+        'num_table', 'num_refri', 'num_estuf', 'num_lavad', 'num_micro', 'num_licua'
+    ]
+    
+    # 4. Servicios y Conectividad (Fundamentales hoy en día)
+    servicios = ['telefono', 'celular', 'conex_inte', 'tv_paga']
+    
+    # 5. Variables de flujo (Autoconsumo y transferencias)
+    flujos = ['autocons', 'regalos', 'transferen', 'remunera']
+
+    all_cols = identificadores + alim_cols + equipamiento + servicios + flujos
+    
+    # Filtramos solo las columnas que existan en el DF por si las moscas
+    df_filtered = df[df.columns.intersection(all_cols)].copy()
+    
+    # --- TRANSFORMACIONES RÁPIDAS ---
+    
+    # Limpieza de folios
+    #df_filtered['folioviv'] = df_filtered['folioviv'].astype(str).str.zfill(10)
+    #df_filtered['foliohog'] = df_filtered['foliohog'].astype(str)
+    
+    # Crear un "Índice de Conectividad" (0 a 3)
+    # Convertimos a binario (1 si tiene, 0 si no)
+    for col in ['telefono', 'conex_inte', 'celular', 'tv_paga']:
+        # Se convierte a numérico para la comparación, manejando robustamente int/float/str.
+        condition = pd.to_numeric(df_filtered[col], errors='coerce') == 1
+        df_filtered[col] = np.where(condition, 1, 0)
+
+    df_filtered['indice_conectividad'] = df_filtered['conex_inte'] + df_filtered['celular']
+    
+    # Transformación de variables de flujo a dicotómicas
+    flujo_cols_bin = ['autocons', 'regalos', 'transferen', 'remunera']
+    for col in flujo_cols_bin:
+        if col in df_filtered.columns:
+            condition = pd.to_numeric(df_filtered[col], errors='coerce') == 1
+            df_filtered[col] = np.where(condition, 1, 0)
+
+    # IAAS (Inseguridad Alimentaria) - Conversión a Dicotómicas
+    # Nota: En la base original 1=Sí, 2=No.
+    # Convertimos las columnas de seguridad alimentaria a formato dicotómico (1=Sí, 0=No)
+    for col in alim_cols:
+        if col in df_filtered.columns:
+            # Se convierte a numérico para la comparación, manejando robustamente int/float/str.
+            condition = pd.to_numeric(df_filtered[col], errors='coerce') == 1
+            df_filtered[col] = np.where(condition, 1, 0)
+            
+    # Creamos el score total de inseguridad alimentaria sumando las columnas ya procesadas
+    existing_alim_cols = [c for c in alim_cols if c in df_filtered.columns]
+    df_filtered['score_iaas'] = df_filtered[existing_alim_cols].sum(axis=1)
+    
+    return df_filtered
+
+======================================================================
+--- Archivo: src/ingresos.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def generar_ingreso_deflactado_ago2024(trabajo_df: pd.DataFrame,
+                                       ingresos_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Genera el ingreso monetario deflactado a precios de agosto 2024
+    a partir de las tablas de trabajo e ingresos.
+
+    Parameters
+    ----------
+    trabajo_df : pd.DataFrame
+        Tabla de trabajo (aguinaldo).
+    ingresos_df : pd.DataFrame
+        Tabla de ingresos.
+
+    Returns
+    -------
+    pd.DataFrame
+        Tabla a nivel hogar con:
+        ['folioviv', 'foliohog', 'ing_mon', 'ing_lab', 'ing_ren', 'ing_tra']
+    """
+
+    # -----------------------------
+    # 1. Base de aguinaldo
+    # -----------------------------
+    trabajo_df = trabajo_df.copy()
+
+    trabajo_df[['numren', 'id_trabajo', 'pres_2']] = (
+        trabajo_df[['numren', 'id_trabajo', 'pres_2']]
+        .apply(pd.to_numeric, errors='coerce')
+    )
+
+    aguinaldo = pd.pivot_table(
+        trabajo_df,
+        index=['folioviv', 'foliohog', 'numren'],
+        columns='id_trabajo',
+        values='pres_2',
+        aggfunc=np.sum,
+        fill_value=0
+    )
+
+    aguinaldo.columns = [f'pres_2{c}' for c in aguinaldo.columns]
+    aguinaldo = aguinaldo.reset_index()
+
+    aguinaldo['trab'] = 1
+    aguinaldo['aguinaldo1'] = np.where(aguinaldo.get('pres_21', 0) == 2, 1, 0)
+    aguinaldo['aguinaldo2'] = np.where(aguinaldo.get('pres_22', 0) == 2, 1, 0)
+
+    aguinaldo = aguinaldo[
+        ['folioviv', 'foliohog', 'numren', 'aguinaldo1', 'aguinaldo2', 'trab']
+    ]
+
+    # -----------------------------
+    # 2. Merge con ingresos
+    # -----------------------------
+    ing = ingresos_df.copy()
+
+    df = pd.merge(
+        ing,
+        aguinaldo,
+        on=['folioviv', 'foliohog', 'numren'],
+        how='outer'
+    )
+
+    df = df[
+        ~(
+            ((df['clave'] == 'P009') & (df['aguinaldo1'] != 1)) |
+            ((df['clave'] == 'P016') & (df['aguinaldo2'] != 1))
+        )
+    ]
+
+    # -----------------------------
+    # 3. Deflactores
+    # -----------------------------
+    # Es una mejor práctica tener estos valores en un diccionario para mantenibilidad.
+    DEFLACTORES = {
+        'dic23': 0.9732378523, 'ene24': 0.981928198, 'feb24': 0.9828545801,
+        'mar24': 0.9856778396, 'abr24': 0.9876702962, 'may24': 0.9858395889,
+        'jun24': 0.9895671737, 'jul24': 0.9999264776, 'ago24': 1.0,
+        'sep24': 1.0004926,    'oct24': 1.0059920743, 'nov24': 1.0103740084,
+        'dic24': 1.0142339335
+    }
+
+    num_cols = [
+        'mes_1', 'mes_2', 'mes_3', 'mes_4', 'mes_5', 'mes_6',
+        'ing_1', 'ing_2', 'ing_3', 'ing_4', 'ing_5', 'ing_6'
+    ]
+
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors='coerce')
+
+    # -----------------------------
+    # 4. Deflactación mensual
+    # -----------------------------
+    # Reemplazamos los np.where anidados con un enfoque más legible y mantenible.
+    # Cada columna de ingreso (ing_i) se deflacta según el mes (mes_i) en que se reportó.
+    deflator_maps = {
+        'ing_1': {7: DEFLACTORES['jul24'], 8: DEFLACTORES['ago24'], 9: DEFLACTORES['sep24'], 10: DEFLACTORES['oct24']},
+        'ing_2': {6: DEFLACTORES['jun24'], 7: DEFLACTORES['jul24'], 8: DEFLACTORES['ago24'], 9: DEFLACTORES['sep24']},
+        'ing_3': {5: DEFLACTORES['may24'], 6: DEFLACTORES['jun24'], 7: DEFLACTORES['jul24'], 8: DEFLACTORES['ago24']},
+        'ing_4': {4: DEFLACTORES['abr24'], 5: DEFLACTORES['may24'], 6: DEFLACTORES['jun24'], 7: DEFLACTORES['jul24']},
+        'ing_5': {3: DEFLACTORES['mar24'], 4: DEFLACTORES['abr24'], 5: DEFLACTORES['may24'], 6: DEFLACTORES['jun24']},
+        'ing_6': {2: DEFLACTORES['feb24'], 3: DEFLACTORES['mar24'], 4: DEFLACTORES['abr24'], 5: DEFLACTORES['may24']},
+    }
+
+    for i in range(1, 7):
+        ing_col = f'ing_{i}'
+        mes_col = f'mes_{i}'
+        
+        # Creamos una serie de deflactores usando el mapa correspondiente
+        deflator_series = df[mes_col].map(deflator_maps[ing_col]).fillna(1.0)
+        
+        # Aplicamos la deflactación de forma vectorizada
+        df[ing_col] = df[ing_col].divide(deflator_series)
+
+    # -----------------------------
+    # 5. Ajustes especiales
+    # -----------------------------
+    df.loc[df['clave'].isin(['P008', 'P015']), 'ing_1'] = df['ing_1'] / DEFLACTORES['may24'] / 12
+    df.loc[df['clave'].isin(['P009', 'P016']), 'ing_1'] = df['ing_1'] / DEFLACTORES['dic24'] / 12
+
+    df['ing_mens'] = df[['ing_1', 'ing_2', 'ing_3', 'ing_4', 'ing_5', 'ing_6']].mean(axis=1, skipna=True)
+
+    # Corrección: Asegurar que no haya ingresos negativos.
+    # Un ingreso negativo en una transferencia no tiene sentido para medir bienestar.
+    # Se asume que el valor mínimo es 0 (no se recibió nada o se devolvió dinero, pero no se cuenta como ingreso negativo).
+    # Esto también maneja los NaNs que puedan resultar del .mean() si todas las entradas son NaN.
+    df['ing_mens'] = df['ing_mens'].clip(lower=0).fillna(0)
+
+    # -----------------------------
+    # 6. Clasificación de ingresos
+    # -----------------------------
+    df.loc[
+        ((df['clave'].between('P001', 'P009')) |
+         (df['clave'].between('P011', 'P016')) |
+         (df['clave'].between('P018', 'P048')) |
+         (df['clave'].between('P067', 'P081')) |
+         (df['clave'].between('P101', 'P108'))),
+        'ing_mon'
+    ] = df['ing_mens']
+
+    df.loc[
+        ((df['clave'].between('P001', 'P009')) |
+         (df['clave'].between('P011', 'P016')) |
+         (df['clave'].between('P018', 'P022')) |
+         (df['clave'].between('P067', 'P081'))),
+        'ing_lab'
+    ] = df['ing_mens']
+
+    df.loc[df['clave'].between('P023', 'P031'), 'ing_ren'] = df['ing_mens']
+
+    df.loc[
+        ((df['clave'].between('P032', 'P048')) |
+         (df['clave'].between('P101', 'P108'))),
+        'ing_tra'
+    ] = df['ing_mens']
+
+    # -----------------------------
+    # 7. Agregación final a hogar
+    # -----------------------------
+    df = (
+        df.groupby(['folioviv', 'foliohog'])[['ing_mon', 'ing_lab', 'ing_ren', 'ing_tra']]
+        .sum(numeric_only=True)
+        .reset_index()
+    )
+
+    return df
+
+======================================================================
+--- Archivo: src/pipeline.py
+======================================================================
+import pandas as pd
+import numpy as np
+from sklearn.feature_selection import VarianceThreshold
+
+# Importar todas las funciones de procesamiento de los otros módulos
+from src.poblacion import process_poblacion
+from src.viviendas import process_viviendas
+from src.hogares import process_hogares
+from src.trabajos import process_trabajos
+from src.gastospersona import procesar_gastos_persona_enigh
+from src.gastoshogar import procesar_gastos_enigh
+from src.ingresos import generar_ingreso_deflactado_ago2024
+
+def create_master_table(
+    pob_keys: pd.DataFrame,
+    pob_df: pd.DataFrame,
+    viv_df: pd.DataFrame,
+    hog_df: pd.DataFrame,
+    trab_df: pd.DataFrame,
+    gasper_df: pd.DataFrame,
+    gashog_df: pd.DataFrame,
+    ing_df: pd.DataFrame,
+    output_path: str = "master_table.csv"
+) -> pd.DataFrame:
+    """
+    Orquesta el procesamiento de todas las tablas de la ENIGH, las une en una
+    sola tabla maestra a nivel persona y la guarda en un archivo CSV.
+
+    Args:
+        pob_keys: DataFrame con las llaves y la variable objetivo de pobreza.
+        pob_df: DataFrame raw de población.
+        viv_df: DataFrame raw de viviendas.
+        hog_df: DataFrame raw de hogares.
+        trab_df: DataFrame raw de trabajos.
+        gasper_df: DataFrame raw de gastos de persona.
+        gashog_df: DataFrame raw de gastos de hogar.
+        ing_df: DataFrame raw de ingresos.
+        output_path: Ruta donde se guardará el archivo CSV final.
+
+    Returns:
+        Un DataFrame maestro con toda la información unificada a nivel persona.
+    """
+    print("Procesando tablas individuales...")
+    pob_keys = pob_keys[['folioviv','foliohog','numren','pobreza','pobreza_e']]
+    pob_keys = pob_keys[~pob_keys['pobreza'].isna()]
+    pob_proc = process_poblacion(pob_df)
+    viv_proc = process_viviendas(viv_df)
+    hog_proc = process_hogares(hog_df)
+    trab_proc = process_trabajos(trab_df)
+    gasper_proc = procesar_gastos_persona_enigh(gasper_df)
+    gashog_proc = procesar_gastos_enigh(gashog_df)
+    # Ingresos necesita los DFs raw de trabajo e ingresos
+    ing_proc = generar_ingreso_deflactado_ago2024(trab_df, ing_df)
+
+    print("Uniendo tablas en una tabla maestra...")
+    # La tabla de población es nuestra base (nivel persona)
+    # Las llaves (folioviv, foliohog, numren) ya vienen procesadas como strings
+    # desde cada función. Es más seguro y consistente hacer el merge con strings
+    # para evitar problemas con ceros a la izquierda.
+    master_df = pob_keys.merge(pob_proc, on=['folioviv', 'foliohog', 'numren'], how='left') 
+
+    # Merge con viviendas (nivel vivienda)
+    master_df = master_df.merge(viv_proc, on='folioviv', how='left')
+
+    # Merge con hogares, gastos de hogar e ingresos (nivel hogar)
+    keys_hogar = ['folioviv', 'foliohog']
+    master_df = master_df.merge(hog_proc, on=keys_hogar, how='left')
+    master_df = master_df.merge(gashog_proc, on=keys_hogar, how='left')
+    master_df = master_df.merge(ing_proc, on=keys_hogar, how='left')
+
+    # Merge con trabajos y gastos de persona (nivel persona)
+    keys_persona = ['folioviv', 'foliohog', 'numren']
+    master_df = master_df.merge(trab_proc, on=keys_persona, how='left')
+    master_df = master_df.merge(gasper_proc, on=keys_persona, how='left')
+
+    print(f"Tabla maestra creada con {master_df.shape[0]} filas y {master_df.shape[1]} columnas.")
+    
+    # Guardar en CSV
+    print(f"Guardando tabla maestra en '{output_path}'...")
+    master_df.to_csv(output_path, index=False)
+
+    return master_df
+
+
+def impute_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Imputa valores faltantes en un DataFrame.
+    - Para variables categóricas, usa la categoría '__MISSING__'.
+    - Para variables numéricas, usa la mediana y crea una columna flag.
+
+    Args:
+        df: El DataFrame que se va a limpiar.
+
+    Returns:
+        Un DataFrame sin valores nulos.
+    """
+    print("Iniciando proceso de imputación de datos...")
+    df_clean = df.copy()
+
+    # 1. Imputar variables categóricas
+    categorical_cols = df_clean.select_dtypes(include=['object', 'category']).columns
+    for col in categorical_cols:
+        if df_clean[col].isnull().any():
+            print(f"  - Categórica '{col}': Imputando NaNs con '__MISSING__'.")
+            df_clean[col] = df_clean[col].fillna('__MISSING__')
+
+    # 2. Imputar variables numéricas
+    numerical_cols = df_clean.select_dtypes(include=np.number).columns
+    for col in numerical_cols:
+        if df_clean[col].isnull().any():
+            # Crear la columna flag que indica imputación
+            flag_col_name = f'{col}_imputed'
+            df_clean[flag_col_name] = df_clean[col].isnull().astype(int)
+
+            # Calcular la mediana (ignorando NaNs)
+            median_val = df_clean[col].median()
+            
+            print(f"  - Numérica '{col}': Imputando NaNs con mediana ({median_val:.2f}) y creando flag '{flag_col_name}'.")
+
+            # Imputar con la mediana
+            df_clean[col] = df_clean[col].fillna(median_val)
+    
+    print("Imputación completada. El DataFrame ya no tiene valores faltantes.")
+    return df_clean
+
+
+def prepare_and_split_for_autoencoder(df_imputed: pd.DataFrame, output_dir: str) -> tuple:
+    """
+    Prepara los datos para el autoencoder: convierte categóricas a dummies,
+    y luego divide el dataset en hogares pobres y no pobres.
+
+    Args:
+        df_imputed: El DataFrame maestro ya imputado.
+        output_dir: El directorio donde se guardarán los archivos CSV.
+
+    Returns:
+        Una tupla con (df_processed, df_pobres, df_no_pobres).
+    """
+    print("
+Iniciando preparación y split para el autoencoder...")
+    df_processed = df_imputed.copy()
+
+    # 1. Convertir categóricas a numéricas (One-Hot Encoding)
+    categorical_cols = [
+        'parentesco', 'sexo', 'tipo_viv', 'tenencia', 'class_emp', 'tam_emp', 'tipoact', 
+        'socios', 'soc_nr1', 'soc_nr2', 'soc_resp', 'otra_act', 'tipoact2', 
+        'tipoact3', 'tipoact4', 'lugar', 'conf_pers', 'inst'
+    ]
+    
+    # Nos aseguramos de que solo procesamos las columnas que existen en el DF
+    cols_to_process = [col for col in categorical_cols if col in df_processed.columns]
+    
+    print(f"Convirtiendo {len(cols_to_process)} columnas categóricas a formato dummy...")
+    df_processed = pd.get_dummies(df_processed, columns=cols_to_process, dummy_na=False, dtype=int)
+    
+    # La categoría '__MISSING__' creada por la imputación también se convertirá en una columna dummy,
+    # lo cual es perfecto porque le dice al modelo que la ausencia de dato es información.
+    
+    print(f"El DataFrame ahora tiene {df_processed.shape[1]} columnas después del one-hot encoding.")
+    
+    # 2. Eliminar columnas con baja varianza
+    print("
+Aplicando filtro de baja varianza...")
+    
+    # Separar las columnas que no son features para no eliminarlas
+    non_features = ['folioviv', 'foliohog', 'numren', 'pobreza', 'pobreza_e', 'factor']
+    feature_cols = [col for col in df_processed.columns if col not in non_features]
+    features_df = df_processed[feature_cols]
+
+    # Este umbral elimina variables que tienen el mismo valor en más del 99% de los casos
+    selector = VarianceThreshold(threshold=(.99 * (1 - .99)))
+    selector.fit(features_df)
+
+    # Obtener las columnas que se quedan y las que se van
+    kept_features = features_df.columns[selector.get_support()].tolist()
+    dropped_features = features_df.columns[~selector.get_support()].tolist()
+
+    print(f"Dimensión original de features: {features_df.shape[1]}")
+    print(f"Variables eliminadas por baja varianza: {len(dropped_features)}")
+    print(f"Variables que quedaron: {len(kept_features)}")
+
+    if dropped_features:
+        print("
+Columnas eliminadas:")
+        # Imprimir en un formato más legible si son muchas
+        for i in range(0, len(dropped_features), 5):
+             print("  ", dropped_features[i:i+5])
+
+    # Reconstruir el DataFrame con solo las columnas de alta varianza + las no-features
+    df_processed = df_processed[non_features + kept_features]
+    print(f"
+Dimensión final del DataFrame procesado: {df_processed.shape[1]} columnas.")
+
+    # 3. Guardar el DataFrame procesado completo
+    full_path = f"{output_dir}/full_processed.csv"
+    print(f"Guardando el DataFrame procesado completo en '{full_path}'...")
+    df_processed.to_csv(full_path, index=False)
+
+    # 4. Hacer el split entre pobres y no pobres
+    # Usamos la variable 'pobreza' que viene desde el inicio (1=Pobre, 0=No Pobre)
+    print("Realizando el split entre hogares pobres y no pobres...")
+    df_pobres = df_processed[df_processed['pobreza'] == 1].copy()
+    df_no_pobres = df_processed[df_processed['pobreza'] == 0].copy()
+
+    print(f"  - Encontrados {len(df_pobres)} registros de personas en pobreza.")
+    print(f"  - Encontrados {len(df_no_pobres)} registros de personas no pobres.")
+
+    # 5. Guardar los DataFrames del split
+    pobres_path = f"{output_dir}/pobres.csv"
+    no_pobres_path = f"{output_dir}/no_pobres.csv"
+    
+    print(f"Guardando el set de pobres en '{pobres_path}'...")
+    df_pobres.to_csv(pobres_path, index=False)
+    
+    print(f"Guardando el set de no pobres en '{no_pobres_path}'...")
+    df_no_pobres.to_csv(no_pobres_path, index=False)
+
+    print("Proceso completado. ¡Archivos listos para el modelado!")
+    return df_processed, df_pobres, df_no_pobres
+
+======================================================================
+--- Archivo: src/poblacion.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def process_poblacion(df):
+    # 1. BLINDAJE Y LIMPIEZA
+    df = df.copy()
+    
+    # Llaves como strings
+    for col in ['parentesco', 'nivelaprob', 'gradoaprob']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip().str.zfill(2)
+    
+    #df['folioviv'] = df['folioviv'].str.zfill(10) # Folio viv siempre a 10
+    
+    # Números como números
+    cols_num = ['edad', 'hijos_viv', 'hijos_sob', 'factor']
+    for col in cols_num:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 2. TRANSFORMACIONES ESTRATÉGICAS
+    
+    # A) REZAGO EDUCATIVO (Simplificado)
+    # Creamos una variable de 'años_escolaridad' aproximada
+    # (Esto es una joya para modelos de regresión)
+    dict_nivel = {
+        '00': 0, '01': 0, '02': 6, '03': 9, '04': 12, 
+        '05': 12, '06': 12, '07': 16, '08': 18, '09': 22
+    }
+    df['anios_esc'] = df['nivelaprob'].map(dict_nivel).fillna(0) + pd.to_numeric(df['gradoaprob'], errors='coerce').fillna(0)
+
+    # B) ACCESO A SALUD (Dummy 1/0)
+    # Si tiene cualquier institución de la 1 a la 9 (IMSS, ISSSTE, Bienestar, etc.)
+    inst_cols = [f'inst_{i}' for i in range(1, 10)]
+    df['tiene_salud'] = df[inst_cols].apply(lambda x: 1 if 1 in x.values else 0, axis=1)
+
+    # C) DISCAPACIDAD (Dummy 1/0)
+    # Si tiene dificultad mucha o no puede en cualquiera de las dimensiones
+    disc_cols = [c for c in df.columns if 'disc_' in c]
+    # En ENIGH, 1 y 2 es "poca/ninguna", 3 y 4 es "mucha/no puede"
+    df['pob_discapacidad'] = df[disc_cols].apply(lambda x: 1 if any(v in ['3', '4'] for v in x.values) else 0, axis=1)
+
+    # D) TRABAJO DOMÉSTICO (Consolidar Uso del Tiempo)
+    # Sumamos horas de las columnas de usotiempo (ej. usotiempo1 es cocinar, 2 limpiar, etc.)
+    # Ojo: aquí deberías decidir si sumas las horas o solo el score
+    uso_cols = [f'usotiempo{i}' for i in range(1, 8)]
+    df['score_trabajo_domestico'] = df[uso_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
+
+    # E) CONVERSIÓN A VARIABLES DICOTÓMICAS
+    # Se convierten varias columnas a formato binario (1=Sí, 0=No/No especificado)
+    # para facilitar su uso en modelos.
+
+    # Columnas donde el código '1' representa una respuesta afirmativa.
+    affirmative_is_1 = [
+        'afrod', 'hablaind', 'etnia', 'alfabetism',
+        'asis_esc', 'segsoc', 'trabajo_mp'
+    ]
+    for col in affirmative_is_1:
+        if col in df.columns:
+            # Se convierte a numérico antes de comparar para manejar de forma robusta
+            # los tipos mixtos (int, float, object). Así, 1, 1.0 y '1' se tratan igual.
+            # Los valores no numéricos (errores) o nulos se evaluarán como Falso, resultando en 0.
+            condition = pd.to_numeric(df[col], errors='coerce') == 1
+            df[col] = np.where(condition, 1, 0)
+
+    # Caso especial para num_trabaj: 1 si tiene al menos un trabajo, 0 si no.
+    if 'num_trabaj' in df.columns:
+        # Se convierte a numérico, los errores/NaN se vuelven 0.
+        # Luego, cualquier valor > 0 se convierte en 1.
+        df['num_trabaj'] = (pd.to_numeric(df['num_trabaj'], errors='coerce').fillna(0) > 0).astype(int)
+    # 3. SELECCIÓN FINAL (Las que de verdad mueven la aguja)
+    final_columns = [
+        'folioviv', 'foliohog', 'numren', 'parentesco', 'edad', 'sexo',
+        'anios_esc', 'alfabetism', 'asis_esc', 
+        'tiene_salud', 'segsoc', 'pob_discapacidad',
+        'etnia', 'hablaind', 'afrod', 
+        'trabajo_mp', 'num_trabaj', 'score_trabajo_domestico',
+        'factor'
+    ]
+    
+    # Usar intersection para evitar errores si alguna columna no existe
+    return df[df.columns.intersection(final_columns)]
+
+======================================================================
+--- Archivo: src/results.py
+======================================================================
+import os
+import sys
+
+# --- 1. CONFIGURACIONES CRÍTICAS (Ejecutar antes de cualquier import) ---
+# Evita el bloqueo del kernel en macOS por conflicto de librerías SSL/KMP
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+# Fuerza el uso de CPU para evitar errores de drivers CUDA/Metal en la carga
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+# --- 2. IMPORTACIÓN DE LIBRERÍAS ---
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+import joblib
+import shap
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# --- 3. CONFIGURACIÓN DE RUTAS ---
+# Rutas locales (Mac) hacia tus datos de CONEVAL y modelos
+BASE_DIR_MODELOS = '/Users/davidlizama/Documents/modelos_tesis/Cap3_MedicionPobreza/results/'
+BASE_DIR_DATOS = '/Users/davidlizama/Documents/modelos_tesis/Cap3_MedicionPobreza/data/'
+
+PATH_MODEL = os.path.join(BASE_DIR_MODELOS, 'autoencoder_final.keras')
+PATH_SCALER = os.path.join(BASE_DIR_MODELOS, 'scaler_final.joblib')
+PATH_POBRES = os.path.join(BASE_DIR_DATOS, 'pobres.csv')
+PATH_NO_POBRES = os.path.join(BASE_DIR_DATOS, 'no_pobres.csv')
+TXT_OUTPUT = 'resultados_tesis.txt'
+
+def preprocess_data_for_inference(df, scaler):
+    """
+    Prepara un DataFrame para la inferencia con el autoencoder asegurando
+    la consistencia con las variables de entrenamiento.
+    """
+    feature_cols = scaler.feature_names_in_
+    
+    missing_cols = [col for col in feature_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Faltan las siguientes columnas en el DataFrame: {missing_cols}")
+    
+    factor = df['factor'].copy()
+    df_features = df[feature_cols]
+    
+    # Aplicar la transformación (NO fit_transform)
+    X_scaled = scaler.transform(df_features)
+    
+    return X_scaled, factor, feature_cols
+
+def filter_coneval_vars(impact_series):
+    """Filtra variables tradicionales del índice de pobreza de CONEVAL."""
+    coneval_keywords = [
+        'ing_', 'gasto_', 'carencia', 'rezago_educ', 'acceso_salud', 
+        'seguridad_social', 'alim', 'serv_agua', 'serv_dren', 'serv_luz',
+        'pared', 'techo', 'piso', 'combustible'
+    ]
+    mask = ~impact_series.index.str.contains('|'.join(coneval_keywords), case=False)
+    return impact_series[mask]
+
+def main():
+    # Redirigir la salida estándar a un archivo de texto
+    original_stdout = sys.stdout
+    with open(TXT_OUTPUT, 'w', encoding='utf-8') as f:
+        sys.stdout = f
+        
+        print("="*50)
+        print("INICIANDO PIPELINE DE INFERENCIA - MEDICIÓN DE POBREZA")
+        print("="*50)
+
+        # --- FASE 1: CARGA DE ARTEFACTOS ---
+        print("
+[1/4] Cargando modelo y escalador...")
+        if not os.path.exists(PATH_MODEL):
+            raise FileNotFoundError(f"No se encontró el modelo en: {PATH_MODEL}")
+        if not os.path.exists(PATH_SCALER):
+            raise FileNotFoundError(f"No se encontró el escalador en: {PATH_SCALER}")
+
+        autoencoder = load_model(PATH_MODEL, compile=False)
+        lr_optimo = 0.000576
+        autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr_optimo), loss='mse')
+        scaler = joblib.load(PATH_SCALER)
+        
+        print(f"Modelo cargado exitosamente. {len(autoencoder.layers)} capas detectadas.")
+        print(f"Escalador cargado. Esperando {len(scaler.feature_names_in_)} variables.")
+
+        # --- FASE 2: CARGA Y PREPROCESAMIENTO DE DATOS ---
+        print("
+[2/4] Cargando y preprocesando bases de datos de CONEVAL...")
+        df_pobres = pd.read_csv(PATH_POBRES)
+        df_no_pobres = pd.read_csv(PATH_NO_POBRES)
+        
+        X_pobres_scaled, factor_pobres, feature_names = preprocess_data_for_inference(df_pobres, scaler)
+        X_no_pobres_scaled, factor_no_pobres, _ = preprocess_data_for_inference(df_no_pobres, scaler)
+
+        # --- FASE 3: ERROR DE RECONSTRUCCIÓN ---
+        print("
+[3/4] Generando reconstrucciones y calculando Error Cuadrático Medio (MSE)...")
+        # Aquí sí pasamos todos los datos (la predicción es rápida)
+        reconstructions = autoencoder.predict(X_pobres_scaled, verbose=0)
+        mse_per_observation = np.mean((X_pobres_scaled - reconstructions)**2, axis=1)
+        df_pobres['reconstruction_error'] = mse_per_observation
+        
+        print("
+Resumen estadístico del Error de Reconstrucción (Hogares Pobres):")
+        print(df_pobres['reconstruction_error'].describe())
+
+        # Guardar gráfico de distribución
+        plt.figure(figsize=(10, 6))
+        sns.histplot(df_pobres['reconstruction_error'], bins=50, kde=True)
+        plt.title('Distribución del Error de Reconstrucción (Pobres)')
+        plt.xlabel('Error Cuadrático Medio (MSE)')
+        plt.ylabel('Frecuencia')
+        plt.tight_layout()
+        plt.savefig('distribucion_error.png')
+        plt.close()
+
+        # --- FASE 4: ANÁLISIS SHAP OPTIMIZADO (TURBO) ---
+        print("
+[4/4] Inicializando análisis SHAP (Versión Optimizada por Muestreo)...")
+        
+        # 1. Background reducido para mayor velocidad (50 es el estándar recomendado para GradientExplainer)
+        background_sample = shap.sample(X_no_pobres_scaled, 50)
+        explainer = shap.GradientExplainer(autoencoder, background_sample)
+        
+        # 2. Tomar una muestra representativa de 1000 hogares pobres
+        np.random.seed(42)  # Semilla para reproducibilidad
+        indices_muestra = np.random.choice(range(len(X_pobres_scaled)), size=1000, replace=False)
+        X_inferencia_shap = X_pobres_scaled[indices_muestra]
+        factor_muestra = factor_pobres.iloc[indices_muestra]
+        df_pobres_muestra = df_pobres.iloc[indices_muestra]
+
+        print(f"Calculando valores SHAP para {len(X_inferencia_shap)} registros muestreados...")
+        shap_values = explainer.shap_values(X_inferencia_shap)
+        shap_values_pobres = shap_values[0]
+
+        # Ajustar el objeto de explicación para la gráfica Summary
+        # Graficamos el top de anomalías DENTRO de la muestra
+        top_error_indices_muestra = df_pobres_muestra['reconstruction_error'].nlargest(200).index
+        # Mapear los índices originales del dataframe a los índices posicionales de la matriz de la muestra
+        posiciones_top_error = [list(df_pobres_muestra.index).index(idx) for idx in top_error_indices_muestra]
+        
+        shap_explanation = shap.Explanation(
+            values=shap_values_pobres[posiciones_top_error],
+            base_values=explainer.expected_value[0],
+            data=X_inferencia_shap[posiciones_top_error],
+            feature_names=feature_names
+        )
+
+        plt.figure(figsize=(12, 8))
+        shap.summary_plot(shap_explanation, max_display=20, show=False)
+        plt.tight_layout()
+        plt.savefig('shap_summary_plot.png')
+        plt.close()
+
+        # --- FASE 5: IMPACTO GLOBAL PONDERADO (NUEVAS DIMENSIONES) ---
+        print("
+--- RESULTADOS: DIMENSIONES DE POBREZA ---")
+        abs_shap_values = np.abs(shap_values_pobres)
+        
+        # OJO: Ponderar usando el factor de expansión exclusivo de la muestra
+        weighted_shap_values = abs_shap_values * factor_muestra.to_numpy()[:, np.newaxis]
+        
+        global_weighted_impact = pd.Series(np.sum(weighted_shap_values, axis=0), index=feature_names)
+        mean_global_weighted_impact = global_weighted_impact / factor_muestra.sum()
+        mean_global_weighted_impact.sort_values(ascending=False, inplace=True)
+        
+        print("
+Top 10 variables con mayor impacto global ponderado:")
+        print(mean_global_weighted_impact.head(10))
+
+        # Filtrar variables tradicionales de CONEVAL
+        non_coneval_impact = filter_coneval_vars(mean_global_weighted_impact)
+        top_15_new_dimensions = non_coneval_impact.head(15)
+        
+        print("
+Top 15 'Nuevas Dimensiones' descubiertas por el modelo:")
+        print(top_15_new_dimensions)
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+        top_15_new_dimensions.sort_values(ascending=True).plot(kind='barh', ax=ax, color='skyblue')
+        ax.set_title('Top 15 Nuevas Dimensiones de Pobreza (Muestra Representativa)', fontsize=16)
+        ax.set_xlabel('Impacto SHAP Absoluto Promedio Ponderado', fontsize=12)
+        ax.set_ylabel('Variables', fontsize=12)
+        plt.tight_layout()
+        plt.savefig('nuevas_dimensiones.png')
+        plt.close()
+
+        print("
+Proceso finalizado exitosamente. Gráficos generados como PNG.")
+
+    # Restaurar la salida a la consola al terminar
+    sys.stdout = original_stdout
+    print(f"¡Listo! El análisis con la muestra terminó rápido. Resultados guardados en '{TXT_OUTPUT}'.")
+
+if __name__ == "__main__":
+    main()
+
+======================================================================
+--- Archivo: src/trabajos.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def process_trabajos(df):
+    df = df.copy()
+    # Reemplazar strings en blanco o con espacios por NaN para unificar valores faltantes.
+    # Esto soluciona el problema de tener la categoría ' ' en la tabla final.
+    df = df.replace(r'^\s*$', np.nan, regex=True)
+
+    keys = ['folioviv', 'foliohog', 'numren']
+
+    trabajo_cols = ['trapais', 'subor', 'indep', 'personal', 'pago', 'contrato', 'tipocontr']
+    prestaciones_cols = [
+        'pres_1', 'pres_2', 'pres_3', 'pres_4', 'pres_5',
+        'pres_6', 'pres_7', 'pres_8', 'pres_9', 'pres_10',
+        'pres_11', 'pres_12', 'pres_13', 'pres_14', 'pres_15',
+        'pres_16', 'pres_17', 'pres_18', 'pres_19', 'pres_20',
+        'medtrab_1', 'medtrab_2', 'medtrab_3', 'medtrab_4', 'medtrab_5', 'medtrab_6', 'medtrab_7'
+    ]
+    empleo_cols = [
+        'clas_emp', 'tam_emp', 'tipoact', 'no_ing', 'tiene_suel',
+        'socios', 'soc_nr1', 'soc_nr2', 'soc_resp',
+        'otra_act', 'tipoact2', 'tipoact3', 'tipoact4', 'lugar', 'conf_pers'
+    ]
+
+    # 1) PREPARACIÓN VECTORIZADA (Evita usar lambda en groupby)
+    cols_base = keys + trabajo_cols + prestaciones_cols + ['htrab']
+    df_aggs = df[[c for c in cols_base if c in df.columns]].copy()
+    
+    # Convertir prestaciones a 1 (no nulo) y 0 (nulo) antes de agrupar
+    df_aggs[prestaciones_cols] = df_aggs[prestaciones_cols].notna().astype(int)
+    
+    # 2) UN SOLO GROUPBY (En lugar de 3 separados)
+    agg_dict = {col: 'max' for col in trabajo_cols + prestaciones_cols}
+    agg_dict['htrab'] = 'sum'
+    
+    agrupado = df_aggs.groupby(keys, as_index=False).agg(agg_dict)
+    
+    for col in trabajo_cols:
+        agrupado[col] = (agrupado[col] == 1).astype(int)
+        
+    agrupado = agrupado.rename(columns={c: f'flag_{c}' for c in prestaciones_cols})
+
+    # 3) EMPLEO PRINCIPAL (drop_duplicates es C-level y rapidísimo)
+    empleo_principal = df[df['id_trabajo'] == 1].drop_duplicates(subset=keys, keep='first')[keys + empleo_cols]
+
+    # 4) MERGE ÚNICO Y LIMPIEZA
+    df_final = agrupado.merge(empleo_principal, on=keys, how='left')
+    df_final['htrab'] = df_final['htrab'].fillna(0).astype(int)
+
+    # Convertir variables categóricas a string para que los modelos no las traten como numéricas
+    for col in ['class_emp', 'tam_emp', 'tipoact']:
+        if col in df_final.columns:
+            # Rellenar NaNs (de personas sin trabajo principal) y convertir a string
+            df_final[col] = df_final[col].fillna(0).astype(int).astype(str)
+
+    # Convertir 'no_ing' a una variable dicotómica
+    if 'no_ing' in df_final.columns:
+        # 1 si no recibe ingresos, 0 en cualquier otro caso (sí recibe, no aplica, no especificado)
+        condition = pd.to_numeric(df_final['no_ing'], errors='coerce') == 1
+        df_final['no_ing'] = np.where(condition, 1, 0)
+
+    # Convertir 'tiene_suel' a una variable dicotómica
+    if 'tiene_suel' in df_final.columns:
+        # 1 si tiene sueldo, 0 en otro caso (no tiene, no aplica, no especificado)
+        condition = pd.to_numeric(df_final['tiene_suel'], errors='coerce') == 1
+        df_final['tiene_suel'] = np.where(condition, 1, 0)
+
+    return df_final
+
+======================================================================
+--- Archivo: src/train_final_model.py
+======================================================================
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.preprocessing import MinMaxScaler
+import os
+import joblib
+
+def create_final_autoencoder(params, input_shape):
+    """
+    Construye el modelo de autoencoder final usando los hiperparámetros ganadores.
+    Esta función es una adaptación de la usada en el tuning, pero lee los
+    parámetros desde un diccionario en lugar de un 'trial' de Optuna.
+    """
+    # --- Extraer hiperparámetros del diccionario ---
+    bottleneck_dim = params['bottleneck_dim']
+    n_layers = params['n_layers']
+    lr = params['lr']
+    dropout_rate = params['dropout']
+    
+    # Extraer las unidades de cada capa
+    layer_units = [params[f'units_layer_{i}'] for i in range(n_layers)]
+        
+    # --- Construcción del Modelo ---
+    input_layer = layers.Input(shape=(input_shape,), name='input_layer')
+    x = input_layer
+
+    # Encoder
+    for i in range(n_layers):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'encoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'encoder_dropout_{i}')(x)
+
+    # Bottleneck (Espacio latente)
+    bottleneck = layers.Dense(bottleneck_dim, activation='relu', name='latent_space')(x)
+
+    # Decoder (Espejo del encoder)
+    x = bottleneck
+    for i in reversed(range(n_layers)):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'decoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'decoder_dropout_{i}')(x)
+
+    output_layer = layers.Dense(input_shape, activation='sigmoid', name='output_layer')(x)
+
+    autoencoder = models.Model(inputs=input_layer, outputs=output_layer)
+    autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss='mse')
+
+    return autoencoder
+
+if __name__ == "__main__":
+    # --- 1. Definir Hiperparámetros Ganadores y Rutas ---
+    print("Configurando el entrenamiento final...")
+    
+    # Estos son los parámetros del mejor trial que encontraste
+    BEST_PARAMS = {
+        'bottleneck_dim': 15,
+        'n_layers': 3,
+        'lr': 0.000576,
+        'dropout': 0.032113,
+        'units_layer_0': 432,
+        'units_layer_1': 387,
+        'units_layer_2': 362
+        # units_layer_3 y 4 no se usan porque n_layers es 3
+    }
+
+    BASE_DIR = "data/processed/"
+    MODEL_SAVE_DIR = "results/"
+
+    # --- 2. Carga y Preparación de Datos Completos ---
+    print("Cargando el dataset completo de 'no pobres'...")
+    df_no_pobres = pd.read_csv(os.path.join(BASE_DIR, "no_pobres.csv"))
+    print(f"Datos cargados: {df_no_pobres.shape[0]} registros.")
+
+    # Columnas que no son features
+    non_features = ['folioviv', 'foliohog', 'numren', 'pobreza', 'pobreza_e']
+    
+    # El factor de expansión se usa como peso en el entrenamiento
+    weights = df_no_pobres['factor']
+    
+    # Seleccionar solo las columnas de features
+    features_df = df_no_pobres.drop(columns=non_features + ['factor'], errors='ignore')
+    
+    # --- 3. Escalado de Datos ---
+    # Se escala el conjunto de datos completo de 'no pobres'
+    print("Escalando todos los datos de entrenamiento...")
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(features_df)
+    
+    # --- 4. Creación y Entrenamiento del Modelo Final ---
+    print("Creando el modelo final con los mejores hiperparámetros...")
+    final_autoencoder = create_final_autoencoder(BEST_PARAMS, X_scaled.shape[1])
+    
+    print("Resumen del modelo final:")
+    final_autoencoder.summary()
+
+    print("
+Iniciando entrenamiento del modelo final...")
+    # Entrenamos con todos los datos, sin set de validación.
+    # Usamos un número fijo de epochs. 100 es un buen punto de partida.
+    final_autoencoder.fit(
+        X_scaled, X_scaled,
+        sample_weight=weights.to_numpy(),
+        epochs=100,
+        batch_size=512,
+        verbose=2,
+        shuffle=True
+    )
+
+    # --- 5. Guardar el Modelo y el Scaler ---
+    print("
+Entrenamiento completado. Guardando artefactos del modelo...")
+
+    # Crear el directorio si no existe
+    os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+
+    # Guardar el modelo de Keras
+    model_path = os.path.join(MODEL_SAVE_DIR, "autoencoder_final.keras")
+    final_autoencoder.save(model_path)
+    print(f"  - Modelo guardado en: {model_path}")
+
+    # Guardar el scaler de Scikit-learn
+    # Es CRUCIAL para aplicar la misma transformación a los datos de 'pobres'
+    scaler_path = os.path.join(MODEL_SAVE_DIR, "scaler_final.joblib")
+    joblib.dump(scaler, scaler_path)
+    print(f"  - Scaler guardado en: {scaler_path}")
+
+    print("
+¡Proceso finalizado con éxito!")
+
+======================================================================
+--- Archivo: src/tune_autoencoder.py
+======================================================================
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models, callbacks
+import optuna
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+import os
+
+def create_autoencoder(trial, input_shape):
+    """
+    Construye dinámicamente un modelo de autoencoder basado en los hiperparámetros de Optuna.
+    """
+    # --- Espacio de búsqueda de hiperparámetros ---
+    # Forzamos un bottleneck más pequeño y exploramos redes más profundas.
+    bottleneck_dim = trial.suggest_int('bottleneck_dim', 4, 16)
+    n_layers = trial.suggest_int('n_layers', 1, 5) # Aumentamos el máximo a 5
+    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
+    dropout_rate = trial.suggest_float('dropout', 0.0, 0.4)
+    
+    # --- Sugerir parámetros para un número máximo de capas ---
+    # Esto estabiliza el espacio de búsqueda de Optuna. Al definir siempre
+    # los parámetros para el máximo de capas posibles, evitamos errores cuando
+    # `n_layers` cambia entre "trials", lo que podía generar un espacio de búsqueda inconsistente.
+    layer_units = []
+    max_layers = 5 # Debe coincidir con el máximo de 'n_layers'
+    
+    # Forzamos una estructura de embudo: cada capa es más pequeña que la anterior.
+    last_units = 512 # Un valor inicial alto
+    for i in range(max_layers):
+        # CORRECCIÓN: Solo sugerimos y añadimos las unidades una vez por capa.
+        # El límite superior 'last_units' fuerza la estructura de embudo.
+        units = trial.suggest_int(f'units_layer_{i}', 32, last_units)
+        layer_units.append(units)
+        last_units = units # La siguiente capa debe ser más pequeña que esta
+        
+    # --- Construcción Dinámica del Modelo ---
+    input_layer = layers.Input(shape=(input_shape,), name='input_layer')
+    x = input_layer
+
+    # Encoder dinámico
+    # Usamos los parámetros pre-sugeridos, construyendo solo `n_layers`
+    for i in range(n_layers):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'encoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'encoder_dropout_{i}')(x)
+
+    # Bottleneck (Espacio latente)
+    bottleneck = layers.Dense(bottleneck_dim, activation='relu', name='latent_space')(x)
+
+    # Decoder dinámico (Espejo del encoder)
+    x = bottleneck
+    for i in reversed(range(n_layers)):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'decoder_dense_{i}')(x)
+        # Mejora: Añadir dropout también en el decoder para tener simetría y mejor regularización.
+        x = layers.Dropout(dropout_rate, name=f'decoder_dropout_{i}')(x)
+
+    output_layer = layers.Dense(input_shape, activation='sigmoid', name='output_layer')(x)
+
+    autoencoder = models.Model(inputs=input_layer, outputs=output_layer)
+    autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss='mse')
+
+    return autoencoder
+
+def objective(trial, X_train, w_train, X_val, w_val):
+    """
+    Función objetivo que Optuna intentará minimizar.
+    Entrena un autoencoder y devuelve la pérdida de validación.
+    """
+    # Limpiar la sesión de Keras para evitar fugas de memoria
+    tf.keras.backend.clear_session()
+
+    # Crear el modelo para este "trial"
+    autoencoder = create_autoencoder(trial, X_train.shape[1])
+
+    # Callback para detener el entrenamiento si no mejora
+    early_stopping = callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=10,
+        restore_best_weights=True
+    )
+
+    # --- Entrenamiento con Pesos (Factor de Expansión) ---
+    history = autoencoder.fit(
+        X_train, X_train,
+        validation_data=(X_val, X_val, w_val), # Usar pesos en validación también
+        sample_weight=w_train,
+        epochs=100,  # Un número alto, EarlyStopping se encargará de parar
+        batch_size=512,
+        verbose=0,
+        callbacks=[early_stopping]
+    )
+
+    # El valor que queremos MINIMIZAR es la pérdida en validación
+    val_loss = np.min(history.history['val_loss'])
+    return val_loss
+
+
+if __name__ == "__main__":
+    # --- 1. Carga de Datos ---
+    print("Cargando datos pre-procesados...")
+    BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/"
+    
+    # Entrenaremos solo con los "no pobres"
+    df_no_pobres = pd.read_csv(os.path.join(BASE_DIR, "no_pobres.csv"))
+    
+    print(f"Datos de 'no pobres' cargados: {df_no_pobres.shape[0]} registros.")
+
+    # --- 2. Preparación de Datos para el Modelo ---
+    print("Preparando datos para el autoencoder...")
+    
+    # Columnas que no son features
+    non_features = ['folioviv', 'foliohog', 'numren', 'pobreza', 'pobreza_e']
+    
+    # El factor de expansión se trata por separado
+    weights = df_no_pobres['factor']
+    
+    # Seleccionar solo las columnas de features
+    features_df = df_no_pobres.drop(columns=non_features + ['factor'], errors='ignore')
+    
+    # --- 3. Split de Entrenamiento y Validación ---
+    # Dividimos el set de "no pobres" para entrenar y validar el modelo
+    X_train, X_val, w_train, w_val = train_test_split(
+        features_df,
+        weights,
+        test_size=0.2,
+        random_state=42
+    )
+    
+    print(f"  - Set de entrenamiento: {X_train.shape[0]} registros")
+    print(f"  - Set de validación: {X_val.shape[0]} registros")
+
+    # --- 4. Escalado de Datos ---
+    # Es CRUCIAL escalar los datos para redes neuronales.
+    # Usamos MinMaxScaler porque mantiene los ceros y es ideal para autoencoders.
+    scaler = MinMaxScaler()
+    
+    # Ajustar el scaler SOLO con los datos de entrenamiento para evitar data leakage
+    X_train_scaled = scaler.fit_transform(X_train)
+    
+    # Aplicar la misma transformación a los datos de validación
+    X_val_scaled = scaler.transform(X_val)
+    
+    # Convertir de nuevo a DataFrame para mantener nombres de columnas (opcional pero bueno)
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns)
+    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns)
+    
+    print("Datos escalados con MinMaxScaler.")
+
+    # --- 5. Búsqueda de Hiperparámetros con Optuna ---
+    print("
+Iniciando estudio con Optuna para encontrar la mejor arquitectura...")
+    
+    # Creamos un "estudio" que buscará minimizar el resultado de la función 'objective'
+    study = optuna.create_study(direction='minimize')
+    
+    # Optuna llamará a la función 'objective' 50 veces, probando diferentes combinaciones
+    study.optimize(
+        lambda trial: objective(trial, X_train_scaled, w_train, X_val_scaled, w_val),
+        n_trials=100,  # Aumenta este número para una búsqueda más exhaustiva (ej. 100)
+        n_jobs=1      # Usar -1 para paralelizar si tu CPU lo permite, pero en Colab con GPU es mejor 1
+    )
+
+    # --- 6. Resultados ---
+    print("
+¡Estudio de Optuna completado!")
+    print(f"Mejor valor de 'loss' en validación: {study.best_value}")
+    print("Mejor combinación de hiperparámetros encontrada:")
+    for key, value in study.best_params.items():
+        print(f"  - {key}: {value}")
+
+    # Guardar los resultados del estudio
+    results_df = study.trials_dataframe()
+    results_path = os.path.join(BASE_DIR, "optuna_study_results.csv")
+    results_df.to_csv(results_path, index=False)
+    print(f"
+Resultados completos del estudio guardados en: {results_path}")
+
+    # Visualización (requiere plotly)
+    try:
+        fig = optuna.visualization.plot_optimization_history(study)
+        fig.show()
+        fig2 = optuna.visualization.plot_param_importances(study)
+        fig2.show()
+    except ImportError:
+        print("
+Para visualizar los resultados, instala plotly: pip install plotly")
+
+======================================================================
+--- Archivo: src/viviendas.py
+======================================================================
+import pandas as pd
+import numpy as np
+
+def process_viviendas(df):
+    df = df.copy()
+    
+    # 1. BLINDAJE Y LIMPIEZA
+    #df['folioviv'] = df['folioviv'].astype(str).str.zfill(10)
+    
+    # Reemplazar códigos de "No especificado" específicos de la ENIGH a NaN
+    # antes de convertir a numérico. '&' en categóricas, -1 en estim_pago, etc.
+    df = df.replace({'&': np.nan, '& ': np.nan})
+    
+    # Columnas categóricas clave (asegurarse que sean string/object)
+    cols_cat = ['tipo_viv', 'tenencia']
+    for col in cols_cat:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace('.0', '', regex=False).str.strip()
+
+    # Columnas numéricas clave
+    cols_num = ['tot_resid', 'cuart_dorm', 'num_cuarto', 'estim_pago']
+    for col in cols_num:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # 2. FEATURE ENGINEERING (Las variables que "venden")
+
+    # A) HACINAMIENTO (Ratio de personas por dormitorio)
+    # Evitamos división por cero con np.where. Si cuart_dorm es 0, el hacinamiento es el total de residentes.
+    df['ratio_hacinamiento'] = np.where(df['cuart_dorm'] > 0, 
+                                        df['tot_resid'] / df['cuart_dorm'], 
+                                        df['tot_resid']) # Si no hay cuarto, la persona misma es el ratio
+    df['ind_hacinamiento'] = (df['ratio_hacinamiento'] > 2.5).astype(int)
+
+    # B) CALIDAD DE MATERIALES (Dummies de carencia)
+    # Se ajustan las condiciones para que coincidan con el tipo de dato (numérico o string).
+    df['carencia_piso'] = np.where(df['mat_pisos'].astype(str) == '1', 1, 0) # 1 es Tierra
+    # Paredes de material de desecho, lámina o embarro (metodología CONEVAL)
+    df['carencia_pared'] = np.where(df['mat_pared'].isin([1, 2, 3]), 1, 0)
+    # Techos de material de desecho o lámina de cartón
+    df['carencia_techo'] = np.where(df['mat_techos'].isin([1, 2]), 1, 0)
+
+    # C) SERVICIOS BÁSICOS
+    # Carencia de Agua (No entubada dentro de la vivienda o terreno)
+    df['carencia_agua'] = np.where(~df['agua_ent'].isin([1, 2]), 1, 0)
+    # Carencia de Drenaje (Si no tiene o es directo a tubería que da a la calle/río)
+    df['carencia_drenaje'] = np.where(df['drenaje'].isin([3, 4, 5]), 1, 0)
+    # Carencia de Energía Eléctrica
+    df['carencia_luz'] = np.where(df['disp_elect'] == 2, 1, 0)
+    # Combustible para cocinar (Leña o carbón sin chimenea)
+    df['carencia_combustible'] = np.where(df['combus'].astype(str) == '1', 1, 0)
+
+    # D) SCORE DE INFRAESTRUCTURA (Suma de activos de la vivienda)
+    activos = ['cisterna', 'tinaco_azo', 'calent_sol', 'calent_gas', 'aire_acond']
+    for col in activos:
+        df[f'{col}_bin'] = np.where(df[col] == 1, 1, 0)
+    
+    activos_bin = [c for c in df.columns if '_bin' in c]
+    df['score_vivienda_alta'] = df[activos_bin].sum(axis=1)
+
+    # 3. SELECCIÓN FINAL
+    final_columns = [
+        'folioviv', 'tipo_viv', 'tenencia', 'estim_pago',
+        'ratio_hacinamiento', 'ind_hacinamiento',
+        'carencia_piso', 'carencia_pared', 'carencia_techo',
+        'carencia_agua', 'carencia_drenaje', 'carencia_luz', 'carencia_combustible',
+        'score_vivienda_alta', 'tot_resid', 'tot_hog'
+    ]
+    
+    return df[final_columns]
+
+======================================================================
+--- Archivo: notebooks/Poverty_Analysis_SHAP.py
+======================================================================
+
+
+======================================================================
+--- Archivo: notebooks/app.ipynb
+======================================================================
+from google.colab import drive
+drive.mount('/content/drive')
+!rm -rf Cap3_MedicionPobreza
+!git clone https://github.com/LizamaD/Cap3_MedicionPobreza.git
+import pandas as pd
+
+path_bases = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/"
+path_pobreza = '/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Base final/pobreza_24.csv'
+
+
+# --- Carga tus datos crudos ---
+poblacion_raw = pd.read_csv(f"{path_bases}poblacion.csv")
+viviendas_raw = pd.read_csv(f"{path_bases}viviendas.csv")
+hogares_raw = pd.read_csv(f"{path_bases}hogares.csv")
+trabajos_raw = pd.read_csv(f"{path_bases}trabajos.csv")
+gastospersona_raw = pd.read_csv(f"{path_bases}gastospersona.csv")
+gastoshogar_raw = pd.read_csv(f"{path_bases}gastoshogar.csv")
+ingresos_raw = pd.read_csv(f"{path_bases}ingresos.csv")
+pobreza_raw = pd.read_csv(path_pobreza)
+%cd /content/Cap3_MedicionPobreza
+from src.trabajos import process_trabajos
+from src.ingresos import generar_ingreso_deflactado_ago2024
+from src.gastoshogar import procesar_gastos_enigh
+from src.gastospersona import procesar_gastos_persona_enigh
+from src.hogares import process_hogares
+from src.poblacion import process_poblacion
+from src.viviendas import process_viviendas
+from src.pipeline import create_master_table, impute_data, prepare_and_split_for_autoencoder
+# --- Crea la tabla maestra ---
+# Esta función procesa, une todo y guarda el resultado en "master_table.csv"
+master_df = create_master_table(
+    pob_keys=pobreza_raw,
+    pob_df=poblacion_raw,
+    viv_df=viviendas_raw,
+    hog_df=hogares_raw,
+    trab_df=trabajos_raw,
+    gasper_df=gastospersona_raw,
+    gashog_df=gastoshogar_raw,
+    ing_df=ingresos_raw,
+    output_path=f"{path_bases}enigh_master_table.csv" # Ruta sugerida
+)
+
+# --- Imputa los datos faltantes ---
+# Esta función toma la tabla maestra y la deja lista para el modelado
+df_final_limpio = impute_data(master_df)
+
+# --- Verifica el resultado ---
+print("
+DataFrame final después de la imputación:")
+print(df_final_limpio.head())
+
+# Confirma que no hay valores nulos
+print("
+Suma de nulos por columna en el DF final:")
+print(df_final_limpio.isnull().sum().sum()) # Debería ser 0
+
+# Define tu ruta de salida en Google Drive
+output_directory = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/"
+
+# Llama a la nueva función para procesar y guardar todo
+df_processed, df_pobres, df_no_pobres = prepare_and_split_for_autoencoder(
+    df_final_limpio, 
+    output_directory
+)
+
+# Ahora ya tienes tus DataFrames listos para la estrategia de descubrimiento:
+# - df_no_pobres: Para entrenar y validar tu autoencoder.
+# - df_pobres: Para pasarlo por el modelo ya entrenado y analizar el error de reconstrucción.
+
+df_pobres.head(2)
+
+======================================================================
+--- Archivo: notebooks/experimentos.ipynb
+======================================================================
+!rm -rf Cap3_MedicionPobreza
+!git clone https://github.com/LizamaD/Cap3_MedicionPobreza.git
+# 1. Montar Google Drive para acceder a tus archivos
+#from google.colab import drive
+#drive.mount('/content/drive')
+
+# 2. Definir la ruta a tu proyecto
+#    Asegúrate de que esta ruta sea la correcta para tu estructura de carpetas
+#PROJECT_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/modelos_tesis/Cap3_MedicionPobreza"
+%cd /content/Cap3_MedicionPobreza
+
+# 3. Instalar todas las dependencias desde tu archivo requirements.txt
+#    Esto es más limpio y profesional que tener varios !pip install
+print("Instalando dependencias desde requirements.txt...")
+!pip install -r "requirements.txt"
+
+import tensorflow as tf
+
+# Verificamos que TensorFlow esté viendo la GPU
+gpu_devices = tf.config.list_physical_devices('GPU')
+
+if gpu_devices:
+    print(f"¡Chingón! GPU detectada y lista para la acción: {gpu_devices}")
+else:
+    print("¡Aguas! No se detectó ninguna GPU. Ve al menú 'Entorno de ejecución' y activa la GPU.")
+
+# 4. Ejecutar el script de tuning de hiperparámetros
+#    Usamos el comando !python para correr el archivo .py desde el notebook
+print("
+Iniciando el proceso de tuning con Optuna... Esto puede tardar.")
+print("==============================================================")
+
+script_path = f"src/tune_autoencoder.py"
+!python "{script_path}"
+
+print("==============================================================")
+print("¡Proceso de tuning finalizado!")
+
+import pandas as pd
+
+# 5. Cargar y mostrar los resultados del estudio de Optuna
+results_path = f"/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/optuna_study_results.csv"
+try:
+    results_df = pd.read_csv(results_path)
+    print("
+Resumen de los mejores trials encontrados por Optuna:")
+    
+    # Ordenamos por el valor de la pérdida (de menor a mayor) y mostramos los 5 mejores
+    display(results_df.sort_values(by='value').head(5))
+    
+except FileNotFoundError:
+    print(f"No se encontró el archivo de resultados en '{results_path}'. Asegúrate de que el script de tuning se ejecutó correctamente.")
+
+
+print(f"El mejor modelo tiene los parámetros: {results_df.iloc[62,:]}")
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from sklearn.preprocessing import MinMaxScaler
+import os
+import joblib
+
+# --- 1. Definir Rutas y Parámetros Ganadores ---
+
+# Ruta para cargar datos y guardar los artefactos del modelo
+BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/"
+MODEL_SAVE_DIR = BASE_DIR # Guardaremos todo en la misma carpeta
+
+# Hiperparámetros del mejor trial encontrado por Optuna
+# (Asegúrate de que estos son los correctos según tu último estudio)
+BEST_PARAMS = {
+    'bottleneck_dim': 15,
+    'n_layers': 3,
+    'lr': 0.000576,
+    'dropout': 0.032113,
+    'units_layer_0': 432,
+    'units_layer_1': 387,
+    'units_layer_2': 362
+}
+
+print("Configuración lista.")
+print(f"Los artefactos se guardarán en: {MODEL_SAVE_DIR}")
+
+# --- 2. Función para Crear el Modelo ---
+
+def create_final_autoencoder(params, input_shape):
+    """
+    Construye el modelo de autoencoder final usando los hiperparámetros ganadores.
+    """
+    bottleneck_dim = params['bottleneck_dim']
+    n_layers = params['n_layers']
+    lr = params['lr']
+    dropout_rate = params['dropout']
+    layer_units = [params[f'units_layer_{i}'] for i in range(n_layers)]
+        
+    # --- Construcción del Modelo ---
+    input_layer = layers.Input(shape=(input_shape,), name='input_layer')
+    x = input_layer
+
+    # Encoder
+    for i in range(n_layers):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'encoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'encoder_dropout_{i}')(x)
+
+    # Bottleneck
+    bottleneck = layers.Dense(bottleneck_dim, activation='relu', name='latent_space')(x)
+
+    # Decoder
+    x = bottleneck
+    for i in reversed(range(n_layers)):
+        x = layers.Dense(layer_units[i], activation='relu', name=f'decoder_dense_{i}')(x)
+        x = layers.Dropout(dropout_rate, name=f'decoder_dropout_{i}')(x)
+
+    output_layer = layers.Dense(input_shape, activation='sigmoid', name='output_layer')(x)
+
+    autoencoder = models.Model(inputs=input_layer, outputs=output_layer)
+    autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss='mse')
+    return autoencoder
+
+# --- 3. Carga y Preparación de Datos ---
+
+print("
+Cargando el dataset completo de 'no pobres'...")
+try:
+    df_no_pobres = pd.read_csv(os.path.join(BASE_DIR, "no_pobres.csv"))
+    print(f"Datos cargados: {df_no_pobres.shape[0]} registros.")
+
+    # Columnas que no son features
+    non_features = ['folioviv', 'foliohog', 'numren', 'pobreza', 'pobreza_e']
+    
+    # El factor de expansión se usa como peso en el entrenamiento
+    weights = df_no_pobres['factor']
+    
+    # Seleccionar solo las columnas de features (asumiendo que las que no están en la lista son features)
+    features_df = df_no_pobres.drop(columns=non_features + ['factor'], errors='ignore')
+    
+    # --- 4. Escalado de Datos ---
+    print("Escalando todos los datos de entrenamiento con MinMaxScaler...")
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(features_df)
+    
+    # --- 5. Creación y Entrenamiento del Modelo Final ---
+    print("
+Creando el modelo final con los mejores hiperparámetros...")
+    final_autoencoder = create_final_autoencoder(BEST_PARAMS, X_scaled.shape[1])
+    
+    print("Resumen del modelo final:")
+    final_autoencoder.summary()
+
+    print("
+Iniciando entrenamiento del modelo final (puede tardar varios minutos)...")
+    # Entrenamos con todos los datos, sin set de validación, usando los pesos (factor)
+    history = final_autoencoder.fit(
+        X_scaled, X_scaled,
+        sample_weight=weights.to_numpy(),
+        epochs=100, # Un número razonable de épocas para el entrenamiento final
+        batch_size=512,
+        verbose=1,
+        shuffle=True
+    )
+
+    # --- 6. Guardar el Modelo y el Scaler ---
+    print("
+Entrenamiento completado. Guardando artefactos del modelo...")
+
+    # Crear el directorio si no existe
+    os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+
+    # Guardar el modelo de Keras
+    model_path = os.path.join(MODEL_SAVE_DIR, "autoencoder_final.keras")
+    final_autoencoder.save(model_path)
+    print(f"  - Modelo guardado en: {model_path}")
+
+    # Guardar el scaler de Scikit-learn (crucial para la inferencia)
+    scaler_path = os.path.join(MODEL_SAVE_DIR, "scaler_final.joblib")
+    joblib.dump(scaler, scaler_path)
+    print(f"  - Scaler guardado en: {scaler_path}")
+
+    print("
+¡Proceso finalizado con éxito!")
+
+except FileNotFoundError:
+    print(f"ERROR: No se encontró el archivo 'no_pobres.csv' en la ruta: {os.path.join(BASE_DIR, 'no_pobres.csv')}")
+    print("Por favor, asegúrate de que el archivo existe en tu Google Drive antes de ejecutar.")
+except Exception as e:
+    print(f"Ocurrió un error inesperado: {e}")
+
+
+======================================================================
+--- Archivo: notebooks/resultados.ipynb
+======================================================================
+from google.colab import drive
+import os
+
+# Monta Google Drive en el directorio /content/drive
+drive.mount('/content/drive')
+
+# Opcional: Verifica que se montó correctamente listando el contenido de tu Drive
+# Ajusta la ruta a una carpeta que sepas que existe en tu Drive
+print("
+Contenido de la raíz de tu Google Drive:")
+# El directorio base suele ser /content/drive/MyDrive/
+drive_path = '/content/drive/MyDrive/'
+if os.path.exists(drive_path):
+    print(os.listdir(drive_path)[:10]) # Muestra los primeros 10 archivos/carpetas
+else:
+    print(f"El directorio {drive_path} no se encontró. Revisa la ruta.")
+!pip install pandas numpy tensorflow scikit-learn optuna plotly
+!pwd
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+import joblib
+import os
+
+# --- 1. Definir las rutas a tus archivos ---
+# Asegúrate de que tu Google Drive ya esté montado en /content/drive
+path_model = '/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/autoencoder_final.keras'
+path_scaler = '/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/scaler_final.joblib'
+
+# --- 2. Cargar el modelo y el escalador ---
+print("--- Iniciando la carga de artefactos ---")
+
+autoencoder = None
+scaler = None
+
+try:
+    # Verificar que los archivos existen antes de intentar cargarlos
+    if not os.path.exists(path_model):
+        raise FileNotFoundError(f"No se encontró el archivo del modelo en: {path_model}")
+    if not os.path.exists(path_scaler):
+        raise FileNotFoundError(f"No se encontró el archivo del escalador en: {path_scaler}")
+
+    # Cargar el modelo de Keras
+    # Usamos compile=False para cargar solo la arquitectura y los pesos.
+    # Luego lo recompilamos manualmente para tener control total.
+    print(f"Cargando modelo desde: {path_model}")
+    autoencoder = load_model(path_model, compile=False)
+
+    # Recompilar el modelo con los mismos parámetros del entrenamiento
+    # Este learning rate (lr) viene de tu script de entrenamiento (train_final_model.py)
+    lr_optimo = 0.000576
+    print(f"Recompilando el modelo con optimizador Adam (lr={lr_optimo}) y loss='mse'...")
+    autoencoder.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr_optimo), loss='mse')
+    
+    # Cargar el escalador de scikit-learn
+    print(f"Cargando escalador desde: {path_scaler}")
+    scaler = joblib.load(path_scaler)
+    
+    print("
+¡Modelo y escalador cargados y listos para usar!")
+    
+    # Opcional: Mostrar un resumen del modelo para verificar que se cargó bien
+    print("
+Resumen del modelo:")
+    autoencoder.summary()
+
+except Exception as e:
+    print(f"
+--- ERROR ---")
+    print(f"Ocurrió un error durante la carga: {e}")
+    print("Por favor, verifica lo siguiente:")
+    print("1. Que hayas montado tu Google Drive correctamente.")
+    print("2. Que las rutas a los archivos '.keras' y '.joblib' sean exactas.")
+    print("3. Que las versiones de TensorFlow y scikit-learn sean compatibles con las que usaste para guardar los archivos.")
+
+# --- 3. Verificar los objetos cargados ---
+if autoencoder and scaler:
+    print("
+Verificación final:")
+    print(f"  - Objeto del modelo: {type(autoencoder)}")
+    print(f"  - Objeto del escalador: {type(scaler)}")
+    # Si el scaler se ajustó a un DataFrame de pandas, puedes ver las features
+    if hasattr(scaler, 'feature_names_in_'):
+        print(f"  - El escalador fue ajustado con {len(scaler.feature_names_in_)} variables.")
+
+
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+import pandas as pd
+import numpy as np
+import os
+
+# --- 1. Definir rutas y cargar los datos ---
+# Asegúrate de que tu Google Drive ya esté montado.
+BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/"
+path_pobres = os.path.join(BASE_DIR, "pobres.csv")
+path_no_pobres = os.path.join(BASE_DIR, "no_pobres.csv")
+
+print("--- Cargando datasets para el análisis ---")
+df_pobres = None
+df_no_pobres = None
+
+try:
+    # Cargar el dataset de hogares en pobreza
+    if not os.path.exists(path_pobres):
+        raise FileNotFoundError(f"No se encontró el archivo 'pobres.csv' en: {path_pobres}")
+    df_pobres = pd.read_csv(path_pobres)
+    print(f"Datos de 'pobres' cargados: {df_pobres.shape}")
+
+    # Cargar el dataset de hogares no pobres (útil para el background de SHAP)
+    if not os.path.exists(path_no_pobres):
+        raise FileNotFoundError(f"No se encontró el archivo 'no_pobres.csv' en: {path_no_pobres}")
+    df_no_pobres = pd.read_csv(path_no_pobres)
+    print(f"Datos de 'no pobres' cargados: {df_no_pobres.shape}")
+
+except Exception as e:
+    print(f"
+--- ERROR ---")
+    print(f"Ocurrió un error al cargar los datos: {e}")
+    print("Verifica que las rutas y los nombres de archivo sean correctos.")
+
+# --- 2. Función de preprocesamiento para inferencia ---
+# Esta función es clave para asegurar que los datos nuevos se procesan
+# exactamente igual que los datos de entrenamiento.
+
+def preprocess_data_for_inference(df, scaler):
+    """
+    Prepara un DataFrame para la inferencia con el autoencoder.
+    - Extrae el factor de expansión.
+    - Selecciona las columnas correctas usando la info del scaler.
+    - Aplica la transformación del escalador (sin volver a ajustarlo).
+    """
+    # Usar las features con las que se entrenó el scaler para garantizar consistencia
+    feature_cols = scaler.feature_names_in_
+    
+    # Asegurarse de que el DataFrame de entrada tiene todas las columnas necesarias
+    missing_cols = [col for col in feature_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Faltan las siguientes columnas en el DataFrame: {missing_cols}")
+    
+    # Extraer el factor de expansión para análisis ponderado posterior
+    factor = df['factor'].copy()
+    
+    # Seleccionar solo las features en el orden correcto
+    df_features = df[feature_cols]
+    
+    # Aplicar la transformación del scaler (NO se usa fit_transform)
+    X_scaled = scaler.transform(df_features)
+    
+    return X_scaled, factor, feature_cols
+
+# --- 3. Procesar los DataFrames ---
+# (Asegúrate de haber ejecutado la celda anterior donde cargaste el 'scaler')
+
+if df_pobres is not None and df_no_pobres is not None:
+    print("
+--- Preprocesando datos para el análisis ---")
+    try:
+        # Verificar que el objeto 'scaler' existe
+        if 'scaler' not in locals():
+            raise NameError("El objeto 'scaler' no está definido. Asegúrate de haberlo cargado primero.")
+
+        # Procesar el dataset de POBRES
+        X_pobres_scaled, factor_pobres, feature_names = preprocess_data_for_inference(df_pobres, scaler)
+        
+        # Procesar el dataset de NO POBRES
+        X_no_pobres_scaled, factor_no_pobres, _ = preprocess_data_for_inference(df_no_pobres, scaler)
+
+        print("Datos procesados y escalados correctamente.")
+        print(f"  - Shape de datos 'pobres' escalados: {X_pobres_scaled.shape}")
+        print(f"  - Shape de datos 'no pobres' escalados: {X_no_pobres_scaled.shape}")
+        print(f"  - Número de features utilizadas: {len(feature_names)}")
+
+    except (NameError, ValueError) as e:
+        print(f"
+--- ERROR ---")
+        print(f"Ocurrió un error durante el preprocesamiento: {e}")
+
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+from google.colab import drive
+
+# 0. Configuración de la ruta y montaje de Drive
+# Montamos el drive si no lo has hecho ya en una celda previa
+if not os.path.exists('/content/drive'):
+    drive.mount('/content/drive')
+
+BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/images/"
+
+# Crear la carpeta si no existe para evitar errores
+if not os.path.exists(BASE_DIR):
+    os.makedirs(BASE_DIR)
+    print(f"Carpeta creada en: {BASE_DIR}")
+
+# --- 1. Predecir (reconstruir) los datos de los pobres ---
+print("Generando reconstrucciones con el autoencoder...")
+reconstructions = autoencoder.predict(X_pobres_scaled)
+
+# --- 2. Calcular el Error Cuadrático Medio (MSE) por observación ---
+# El error se define como: MSE = (1/n) * Σ(x - x_reconst)^2
+mse_per_observation = np.mean((X_pobres_scaled - reconstructions)**2, axis=1)
+
+# --- 3. Añadir el error al DataFrame original ---
+df_pobres['reconstruction_error'] = mse_per_observation
+
+print("
+Cálculo del error de reconstrucción completado.")
+print(df_pobres['reconstruction_error'].describe())
+
+# --- 4. Visualizar y Guardar la imagen ---
+plt.figure(figsize=(10, 6))
+sns.histplot(df_pobres['reconstruction_error'], bins=50, kde=True, color='teal')
+plt.title('Distribución del Error de Reconstrucción en Hogares Pobres')
+plt.xlabel('Error Cuadrático Medio (MSE)')
+plt.ylabel('Frecuencia')
+
+# DEFINIR NOMBRE DEL ARCHIVO Y GUARDAR
+# Es fundamental usar savefig ANTES de plt.show()
+nombre_archivo = "distribucion_error_reconstruccion.png"
+ruta_final = os.path.join(BASE_DIR, nombre_archivo)
+
+plt.savefig(ruta_final, dpi=300, bbox_inches='tight')
+print(f"
+Imagen guardada exitosamente en: {ruta_final}")
+
+plt.show()
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import shap
+import os
+
+# 1. Configuración de rutas (Usando la misma de tu celda anterior)
+BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/images/"
+if not os.path.exists(BASE_DIR):
+    os.makedirs(BASE_DIR)
+
+# --- 1. Crear muestras eficientes ---
+# Background: 100 es un buen balance. 
+print("Creando background sample...")
+background_sample = shap.sample(X_no_pobres_scaled, 100)
+
+# Evaluación: Muestreamos 500 o 1000 registros de 'pobres' para rapidez y generalización
+# Si X_pobres_scaled es un array de numpy:
+n_muestras = 1000 
+indices_muestra = np.random.choice(X_pobres_scaled.shape[0], n_muestras, replace=False)
+X_pobres_test = X_pobres_scaled[indices_muestra]
+
+print(f"Calculando SHAP para una muestra representativa de {n_muestras} hogares...")
+
+# --- 2. Inicializar y Calcular ---
+explainer = shap.GradientExplainer(autoencoder, background_sample)
+
+# Calculamos solo sobre la muestra 'test'
+shap_values = explainer.shap_values(X_pobres_test)
+shap_values_pobres = shap_values[0]
+import joblib
+import numpy as np
+import os
+
+# Definir la ruta (asegúrate de que BASE_DIR esté definido)
+ruta_shap_list = os.path.join(BASE_DIR, 'shap_values_list.pkl')
+ruta_X_test = os.path.join(BASE_DIR, 'X_pobres_test_sample.npy')
+
+# 1. Guardar la lista completa de SHAP values
+# Usamos joblib porque es más eficiente con listas de arrays grandes
+joblib.dump(shap_values, ruta_shap_list)
+
+# 2. Guardar la matriz de características que usaste para el test
+np.save(ruta_X_test, X_pobres_test)
+
+print(f"✅ ¡Resultados asegurados! 
+Lista SHAP: {ruta_shap_list}
+Datos X: {ruta_X_test}")
+import joblib
+import numpy as np
+import os
+
+# Definimos la lista de nombres de columnas que me pasaste
+columnas_tesis = [
+    'edad', 'afrod', 'hablaind', 'etnia', 'alfabetism', 'asis_esc', 'segsoc', 'trabajo_mp', 
+    'num_trabaj', 'anios_esc', 'tiene_salud', 'pob_discapacidad', 'score_trabajo_domestico', 
+    'estim_pago', 'ratio_hacinamiento', 'ind_hacinamiento', 'carencia_piso', 'carencia_agua', 
+    'carencia_drenaje', 'carencia_combustible', 'score_vivienda_alta', 'tot_resid', 'tot_hog', 
+    'acc_alim1', 'acc_alim2', 'acc_alim3', 'acc_alim4', 'acc_alim5', 'acc_alim6', 'acc_alim7', 
+    'acc_alim8', 'acc_alim9', 'acc_alim10', 'acc_alim11', 'acc_alim12', 'acc_alim13', 
+    'acc_alim14', 'acc_alim15', 'acc_alim16', 'alim17_2', 'alim17_3', 'alim17_4', 'alim17_5', 
+    'alim17_6', 'alim17_7', 'alim17_8', 'alim17_9', 'alim17_11', 'alim17_12', 'acc_alim18', 
+    'telefono', 'celular', 'conex_inte', 'tv_paga', 'num_auto', 'num_van', 'num_pick', 
+    'num_moto', 'num_licua', 'num_micro', 'num_refri', 'num_estuf', 'num_lavad', 'num_compu', 
+    'num_lap', 'num_table', 'autocons', 'regalos', 'remunera', 'transferen', 'indice_conectividad', 
+    'score_iaas', 'gasto_hog_tri', 'gas_hog_nm_tri', 'imujer_tri', 'gasto_alimentos', 
+    'gasto_hog_salud', 'gasto_hog_educ', 'gasto_formal', 'gasto_tarjeta', 'gasto_hog_total', 
+    'pct_gasto_alimentos', 'ing_mon', 'ing_lab', 'ing_ren', 'ing_tra', 'subor', 'indep', 
+    'personal', 'pago', 'contrato', 'tipocontr', 'flag_pres_1', 'flag_pres_2', 'flag_pres_3', 
+    'flag_pres_4', 'flag_pres_5', 'flag_pres_6', 'flag_pres_7', 'flag_pres_8', 'flag_pres_9', 
+    'flag_pres_10', 'flag_pres_11', 'flag_pres_12', 'flag_pres_13', 'flag_pres_14', 'flag_pres_15', 
+    'flag_pres_17', 'flag_pres_18', 'flag_pres_20', 'flag_medtrab_1', 'flag_medtrab_2', 
+    'flag_medtrab_7', 'htrab', 'clas_emp', 'gasto_per_tri', 'gas_per_nm_tri', 'gasto_educ_total', 
+    'gasto_salud_ind', 'inscrip', 'colegia', 'gasto_persona_total', 'tiene_gasto_educ', 
+    'trapais_imputed', 'subor_imputed', 'indep_imputed', 'personal_imputed', 'pago_imputed', 
+    'contrato_imputed', 'tipocontr_imputed', 'flag_pres_1_imputed', 'flag_pres_2_imputed', 
+    'flag_pres_3_imputed', 'flag_pres_4_imputed', 'flag_pres_5_imputed', 'flag_pres_6_imputed', 
+    'flag_pres_7_imputed', 'flag_pres_8_imputed', 'flag_pres_9_imputed', 'flag_pres_10_imputed', 
+    'flag_pres_11_imputed', 'flag_pres_12_imputed', 'flag_pres_13_imputed', 'flag_pres_14_imputed', 
+    'flag_pres_15_imputed', 'flag_pres_16_imputed', 'flag_pres_17_imputed', 'flag_pres_18_imputed', 
+    'flag_pres_19_imputed', 'flag_pres_20_imputed', 'flag_medtrab_1_imputed', 'flag_medtrab_2_imputed', 
+    'flag_medtrab_3_imputed', 'flag_medtrab_4_imputed', 'flag_medtrab_5_imputed', 'flag_medtrab_6_imputed', 
+    'flag_medtrab_7_imputed', 'htrab_imputed', 'clas_emp_imputed', 'no_ing_imputed', 'tiene_suel_imputed', 
+    'gasto_per_tri_imputed', 'gas_per_nm_tri_imputed', 'gasto_educ_total_imputed', 
+    'gasto_salud_ind_imputed', 'inscrip_imputed', 'colegia_imputed', 'gasto_persona_total_imputed', 
+    'tiene_gasto_educ_imputed', 'parentesco_101', 'parentesco_201', 'parentesco_301', 
+    'parentesco_603', 'parentesco_609', 'parentesco_617', 'sexo_1', 'sexo_2', 'tipo_viv_1', 
+    'tipo_viv_2', 'tipo_viv_3', 'tipo_viv_4', 'tenencia_1', 'tenencia_2', 'tenencia_3', 
+    'tenencia_4', 'tenencia_5', 'tam_emp_1', 'tam_emp_10', 'tam_emp_11', 'tam_emp_12', 
+    'tam_emp_2', 'tam_emp_3', 'tam_emp_4', 'tam_emp_5', 'tam_emp_6', 'tam_emp_7', 'tam_emp_8', 
+    'tam_emp_9', 'tam_emp___MISSING__', 'tipoact_0', 'tipoact_1', 'tipoact_2', 'tipoact_3', 
+    'tipoact_4', 'tipoact_5', 'tipoact___MISSING__', 'socios_2', 'socios___MISSING__', 
+    'otra_act_1', 'otra_act_2', 'otra_act___MISSING__', 'tipoact2___MISSING__', 
+    'lugar___MISSING__', 'conf_pers___MISSING__', 'inst_00', 'inst___MISSING__'
+]
+
+# Rutas de guardado
+BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/images/"
+ruta_shap = os.path.join(BASE_DIR, 'shap_values_raw.joblib')
+ruta_X_test = os.path.join(BASE_DIR, 'X_pobres_sample.npy')
+
+# Guardar
+joblib.dump(shap_values, ruta_shap)
+np.save(ruta_X_test, X_pobres_test)
+
+print(f"✅ Archivos guardados en {BASE_DIR}")
+import matplotlib.pyplot as plt
+import shap
+import numpy as np
+
+# 1. Transformar la lista en un array y colapsar las dimensiones
+# shap_values es una lista de 220 matrices de (1000, 220)
+shap_array = np.array(shap_values) 
+
+# Calculamos la media del valor absoluto entre todas las salidas del autoencoder
+# Esto genera una matriz de (1000, 220)
+shap_values_aggregated = np.mean(np.abs(shap_array), axis=0)
+
+# 2. Crear la gráfica
+plt.figure(figsize=(10, 12))
+
+# Usamos plot_type="bar" porque con 220 variables, el dot-plot (beeswarm) 
+# se vuelve ilegible. Las barras muestran la importancia promedio.
+shap.summary_plot(
+    shap_values_aggregated, 
+    X_pobres_test, 
+    feature_names=columnas_tesis,
+    plot_type="bar",
+    max_display=25, # Mostramos las 25 más relevantes para tu análisis
+    show=False
+)
+
+plt.title('Importancia de Variables en la Reconstrucción de Hogares Pobres (SHAP Global)', fontsize=14)
+plt.xlabel('mean(|SHAP value|) (Impacto promedio en el error)')
+
+# 3. Guardar la gráfica en alta resolución
+plt.tight_layout()
+plt.savefig(os.path.join(BASE_DIR, 'grafica_shap_coneval_final.png'), dpi=300, bbox_inches='tight')
+plt.show()
+import pandas as pd
+
+# 1. Calcular el impacto promedio global (Mean Absolute SHAP)
+# 'shap_values_aggregated' tiene forma (1000, 220)
+importancia_media = np.mean(shap_values_aggregated, axis=0)
+
+# 2. Crear un DataFrame para organizar los resultados
+df_importancia = pd.DataFrame({
+    'Variable': columnas_tesis,
+    'Importancia_SHAP': importancia_media
+})
+
+# 3. Ordenar de mayor a menor importancia
+df_importancia = df_importancia.sort_values(by='Importancia_SHAP', ascending=False).reset_index(drop=True)
+
+# 4. Mostrar las Top 20 variables
+print("--- Top 20 Variables más relevantes para el modelo ---")
+print(df_importancia.head(20))
+
+# 5. Guardar el ranking completo en un CSV en tu Drive
+ruta_csv = os.path.join(BASE_DIR, 'ranking_importancia_variables.csv')
+df_importancia.to_csv(ruta_csv, index=False)
+
+print(f"
+✅ Ranking completo guardado en: {ruta_csv}")
+import numpy as np
+import pandas as pd
+import shap
+import matplotlib.pyplot as plt
+import os
+
+# 1. Identificar los 200 hogares con mayor error en el dataset COMPLETO
+# (Asumiendo que df_pobres ya tiene la columna 'reconstruction_error')
+top_error_indices = df_pobres['reconstruction_error'].nlargest(200).index
+X_top_anomalo = X_pobres_scaled[top_error_indices]
+
+print(f"Calculando SHAP para los {len(top_error_indices)} hogares más anómalos...")
+
+# 2. Calcular SHAP solo para estos 200 (En la H100 esto es casi instantáneo)
+# Usamos el mismo explainer y background_sample de antes
+shap_values_top = explainer.shap_values(X_top_anomalo)
+
+# 3. Colapsar dimensiones para el Autoencoder (como hicimos antes)
+# Transformamos la lista a un array y promediamos el impacto absoluto
+shap_array_top = np.array(shap_values_top)
+shap_values_aggregated_top = np.mean(np.abs(shap_array_top), axis=0)
+
+# 4. Crear la explicación para SHAP plots
+# Usamos los nombres de las columnas que definimos antes
+shap_exp_top = shap.Explanation(
+    values=shap_values_aggregated_top,
+    data=X_top_anomalo,
+    feature_names=columnas_tesis # La lista que me pasaste antes
+)
+import numpy as np
+import shap
+import matplotlib.pyplot as plt
+import os
+
+# --- 1. AJUSTE DE DIMENSIONES (El "Fix") ---
+# Forzamos que ambos tengan las mismas filas (200) y columnas (216)
+# Usamos .shape[0] de los datos para que SHAP no se pase del límite
+n_registros = X_top_anomalo.shape[0] 
+
+# Slicing de seguridad: nos aseguramos de que ambos sean (200, 216)
+shap_final_ajustado = shap_values_aggregated_top[:n_registros, :]
+X_final_ajustado = X_top_anomalo[:n_registros, :]
+
+print(f"Nuevas Dimensiones SHAP: {shap_final_ajustado.shape}") # Debe ser (200, 216)
+print(f"Nuevas Dimensiones Datos: {X_final_ajustado.shape}")   # Debe ser (200, 216)
+
+# --- 2. GRAFICAR ---
+plt.figure(figsize=(10, 8))
+
+# Si el error persiste con "dot", cambia plot_type a "bar"
+# El modo "bar" es mucho más estable para matrices casi cuadradas
+try:
+    print("Intentando gráfico de puntos (Beeswarm)...")
+    shap.summary_plot(
+        shap_final_ajustado, 
+        X_final_ajustado,
+        feature_names=columnas_tesis[:X_final_ajustado.shape[1]],
+        max_display=20,
+        plot_type="dot", 
+        show=False
+    )
+except Exception as e:
+    print(f"Fallo el modo puntos debido a: {e}. Cambiando a modo barras (más estable)...")
+    plt.clf() # Limpiar figura fallida
+    shap.summary_plot(
+        shap_final_ajustado, 
+        X_final_ajustado,
+        feature_names=columnas_tesis[:X_final_ajustado.shape[1]],
+        max_display=20,
+        plot_type="bar", 
+        show=False
+    )
+
+plt.title('Factores Determinantes: Top 200 Anomalías Críticas', fontsize=14)
+
+# --- 3. GUARDAR ---
+ruta_anomalia_v3 = os.path.join(BASE_DIR, 'shap_top_200_anomalias_corregido.png')
+plt.savefig(ruta_anomalia_v3, dpi=300, bbox_inches='tight')
+
+print(f"✅ ¡Por fin! Gráfica guardada en: {ruta_anomalia_v3}")
+plt.show()
+import pandas as pd
+import numpy as np
+import os
+
+# --- 1. Calcular la importancia media para el Top 200 ---
+# Usamos el objeto 'shap_final_ajustado' que ya tiene las dimensiones correctas (200, 216)
+importancia_anomalia = np.mean(np.abs(shap_final_ajustado), axis=0)
+
+# --- 2. Crear el DataFrame ---
+# Ajustamos la lista de columnas por si hubo algún recorte previo
+columnas_actuales = columnas_tesis[:shap_final_ajustado.shape[1]]
+
+df_ranking_anomalias = pd.DataFrame({
+    'Variable': columnas_actuales,
+    'Importancia_SHAP_Anomalia': importancia_anomalia
+})
+
+# --- 3. Ordenar y guardar ---
+df_ranking_anomalias = df_ranking_anomalias.sort_values(by='Importancia_SHAP_Anomalia', ascending=False).reset_index(drop=True)
+
+# Guardar en la carpeta de Drive
+ruta_csv_anomalias = os.path.join(BASE_DIR, 'ranking_importancia_top200_anomalias.csv')
+df_ranking_anomalias.to_csv(ruta_csv_anomalias, index=False)
+
+# --- 4. Mostrar el Top 15 en pantalla ---
+print("--- Variables que más explican las Anomalías Críticas (Top 200) ---")
+print(df_ranking_anomalias.head(15))
+
+print(f"
+✅ Ranking de anomalías guardado en: {ruta_csv_anomalias}")
+import numpy as np
+import pandas as pd
+import os
+import joblib
+
+print("--- 1. Analizando dimensiones de SHAP ---")
+# Recuperamos los valores de SHAP (por si la variable se alteró antes)
+ruta_shap = os.path.join(BASE_DIR, 'shap_values_raw.joblib')
+ruta_X_test = os.path.join(BASE_DIR, 'X_pobres_sample.npy')
+
+try:
+    shap_values_raw = joblib.load(ruta_shap)
+    X_test_loaded = np.load(ruta_X_test)
+except FileNotFoundError:
+    shap_values_raw = shap_values
+    X_test_loaded = X_pobres_test
+
+shap_array = np.array(shap_values_raw)
+n_hogares = X_test_loaded.shape[0]
+print(f"Dimensiones reales del SHAP array: {shap_array.shape}")
+
+print("
+--- 2. Colapsando salidas del Autoencoder ---")
+# Detección dinámica de ejes para evitar el ValueError
+if len(shap_array.shape) == 3:
+    if shap_array.shape[0] == n_hogares:
+        # Formato (1000, 216, 216) -> Promediamos el Eje 2 (las salidas)
+        shap_per_household = np.mean(np.abs(shap_array), axis=2)
+    elif shap_array.shape[1] == n_hogares:
+        # Formato (216, 1000, 216) -> Promediamos el Eje 0 (las salidas)
+        shap_per_household = np.mean(np.abs(shap_array), axis=0)
+else:
+    # Formato (1000, 216) si el explainer ya lo colapsó
+    shap_per_household = np.abs(shap_array)
+
+print(f"Dimensiones de SHAP por hogar corregidas: {shap_per_household.shape} -> DEBE SER ({n_hogares}, 216)")
+
+print("
+--- 3. Aplicando Factor de Expansión Poblacional ---")
+# Preparar los pesos de la muestra
+weights = factor_pobres.iloc[indices_muestra].to_numpy().reshape(-1, 1)
+
+# Validar que los pesos coincidan con los hogares
+if shap_per_household.shape[0] != weights.shape[0]:
+    shap_per_household = shap_per_household[:weights.shape[0], :]
+
+print(f"Dimensiones de los pesos: {weights.shape}")
+
+# ¡La multiplicación que fallaba, ahora funcionará por broadcasting perfecto!
+weighted_shap = shap_per_household * weights
+
+# Calculamos Impacto Global
+total_weight = np.sum(weights)
+mean_weighted_impact = np.sum(weighted_shap, axis=0) / total_weight
+
+# Crear la serie final
+impacto_serie_final = pd.Series(mean_weighted_impact, index=columnas_tesis[:shap_per_household.shape[1]])
+impacto_serie_final = impacto_serie_final.sort_values(ascending=False)
+
+# Guardar en Drive
+ruta_csv_ponderado = os.path.join(BASE_DIR, 'impacto_poblacional_ponderado.csv')
+impacto_serie_final.to_csv(ruta_csv_ponderado)
+
+print(f"✅ CSV Poblacional guardado en: {ruta_csv_ponderado}")
+print("
+--- Top 10 Variables Ponderadas ---")
+print(impacto_serie_final.head(10))
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+
+# (Asegúrate de que BASE_DIR esté definida en memoria, o descomenta la siguiente línea)
+# BASE_DIR = "/content/drive/MyDrive/Doctorado_DavidLizama/datos_tesis/coneval/2024/Bases de datos/images/"
+
+# --- Gráfico 1: Top 20 de todas las variables ---
+plt.style.use('seaborn-v0_8-whitegrid')
+fig, ax = plt.subplots(figsize=(12, 10))
+
+# Usamos impacto_serie_final
+impacto_serie_final.head(20).sort_values(ascending=True).plot(kind='barh', ax=ax, color='steelblue')
+ax.set_title('Top 20 Variables con Mayor Impacto Global Ponderado', fontsize=16)
+ax.set_xlabel('Impacto SHAP Absoluto Promedio Ponderado', fontsize=12)
+ax.set_ylabel('Variables', fontsize=12)
+plt.tight_layout()
+
+# GUARDAR GRÁFICO 1
+ruta_grafico_1 = os.path.join(BASE_DIR, 'top_20_impacto_ponderado.png')
+plt.savefig(ruta_grafico_1, dpi=300, bbox_inches='tight')
+print(f"✅ Gráfico 1 guardado en: {ruta_grafico_1}")
+
+plt.show()
+
+# --- Filtro para excluir variables tradicionales ---
+def filter_coneval_vars(impact_series):
+    """Filtra variables del índice de pobreza de CONEVAL."""
+    coneval_keywords = [
+        'ing_', 'gasto_', 'carencia', 'rezago_educ', 'acceso_salud', 
+        'seguridad_social', 'segsoc', 'alim', 'serv_agua', 'serv_dren', 'serv_luz',
+        'pared', 'techo', 'piso', 'combustible', 'hacinamiento', 'vivienda'
+    ]
+    mask = ~impact_series.index.str.contains('|'.join(coneval_keywords), case=False)
+    return impact_series[mask]
+
+print("
+Filtrando variables tradicionales para encontrar 'nuevas dimensiones'...")
+
+# Usamos la variable correcta
+non_coneval_impact = filter_coneval_vars(impacto_serie_final)
+top_15_new_dimensions = non_coneval_impact.head(15)
+
+print("
+Top 15 'Nuevas Dimensiones' de Pobreza encontradas:")
+print(top_15_new_dimensions)
+
+# --- Gráfico 2: Top 15 de "Nuevas Dimensiones" ---
+fig, ax = plt.subplots(figsize=(12, 10))
+top_15_new_dimensions.sort_values(ascending=True).plot(kind='barh', ax=ax, color='skyblue')
+ax.set_title('Top 15 Nuevas Dimensiones de Pobreza (Impacto Global Ponderado)', fontsize=16)
+ax.set_xlabel('Impacto SHAP Absoluto Promedio Ponderado', fontsize=12)
+ax.set_ylabel('Variables', fontsize=12)
+plt.tight_layout()
+
+# GUARDAR GRÁFICO 2
+ruta_grafico_2 = os.path.join(BASE_DIR, 'top_15_nuevas_dimensiones.png')
+plt.savefig(ruta_grafico_2, dpi=300, bbox_inches='tight')
+print(f"✅ Gráfico 2 guardado en: {ruta_grafico_2}")
+
+plt.show()
+import numpy as np
+import pandas as pd
+import plotly.express as px
+from sklearn.decomposition import PCA
+import os
+
+# --- 1. Preparar las muestras ---
+# Usamos 3,000 de cada uno para que la visualización 3D no sature la memoria RAM del navegador
+np.random.seed(42)
+n_sample = 3000
+
+# Muestra No Pobres
+idx_no_pobres = np.random.choice(X_no_pobres_scaled.shape[0], n_sample, replace=False)
+X_np_sample = X_no_pobres_scaled[idx_no_pobres]
+
+# Muestra Pobres
+idx_pobres = np.random.choice(X_pobres_scaled.shape[0], n_sample, replace=False)
+X_p_sample = X_pobres_scaled[idx_pobres]
+
+# --- 2. Calcular error de reconstrucción (Anomalías) ---
+print("Calculando errores para identificar vulnerabilidades ocultas...")
+# Predicción para "No Pobres"
+pred_np = autoencoder.predict(X_np_sample, verbose=0)
+mse_np = np.mean((X_np_sample - pred_np)**2, axis=1)
+
+# Predicción para "Pobres"
+pred_p = autoencoder.predict(X_p_sample, verbose=0)
+mse_p = np.mean((X_p_sample - pred_p)**2, axis=1)
+
+# --- 3. Etiquetar los grupos normales y las anomalías ---
+# Por defecto todos son normales
+labels = np.array(['1. No Pobre (Base)'] * n_sample + ['2. Pobre (Base)'] * n_sample)
+
+# Encontramos el Top 150 de anomalías de cada lado
+idx_anom_np = np.argsort(mse_np)[-150:] 
+idx_anom_p = np.argsort(mse_p)[-150:]   
+
+# Sobrescribimos la etiqueta de esos casos extremos
+labels[idx_anom_np] = '3. Anómalo: No Pobre (Posible Vulnerable)'
+labels[n_sample + idx_anom_p] = '4. Anómalo: Pobre (Atípico/Extremo)'
+
+# Ajustamos el tamaño del punto (anomalías se verán más grandes)
+sizes = np.array([3] * (n_sample * 2))
+sizes[idx_anom_np] = 10
+sizes[n_sample + idx_anom_p] = 10
+
+# --- 4. Reducción de dimensionalidad a 3D (PCA) ---
+print("Aplicando PCA para reducir a 3 dimensiones...")
+X_combined = np.vstack((X_np_sample, X_p_sample))
+pca_3d = PCA(n_components=3)
+X_pca_3d = pca_3d.fit_transform(X_combined)
+
+varianza_total = np.sum(pca_3d.explained_variance_ratio_)
+print(f"Varianza explicada por el espacio 3D: {varianza_total:.2%}")
+
+# --- 5. Crear DataFrame para Plotly ---
+df_plot_3d = pd.DataFrame({
+    'PC1': X_pca_3d[:, 0],
+    'PC2': X_pca_3d[:, 1],
+    'PC3': X_pca_3d[:, 2],
+    'Grupo': labels,
+    'Tamaño': sizes
+})
+
+# Ordenar para que los puntos grandes (anomalías) se dibujen al frente
+df_plot_3d = df_plot_3d.sort_values('Grupo')
+
+# --- 6. Graficar con Plotly ---
+print("Generando ecosistema 3D interactivo...")
+color_map = {
+    '1. No Pobre (Base)': 'lightgray',
+    '2. Pobre (Base)': 'steelblue',
+    '3. Anómalo: No Pobre (Posible Vulnerable)': 'darkorange',
+    '4. Anómalo: Pobre (Atípico/Extremo)': 'crimson'
+}
+
+fig = px.scatter_3d(
+    df_plot_3d, x='PC1', y='PC2', z='PC3',
+    color='Grupo',
+    color_discrete_map=color_map,
+    size='Tamaño',
+    size_max=12,
+    opacity=0.75,
+    title=f'Espacio Latente de Pobreza (3D) - Varianza retenida: {varianza_total:.1%}'
+)
+
+fig.update_layout(
+    scene=dict(
+        xaxis_title=f'Dimensión 1 ({pca_3d.explained_variance_ratio_[0]:.1%})',
+        yaxis_title=f'Dimensión 2 ({pca_3d.explained_variance_ratio_[1]:.1%})',
+        zaxis_title=f'Dimensión 3 ({pca_3d.explained_variance_ratio_[2]:.1%})',
+        bgcolor='white'
+    ),
+    margin=dict(l=0, r=0, b=0, t=50),
+    legend=dict(title='Clasificación Estructural', orientation="v", y=0.5, x=1.1)
+)
+
+# --- 7. Guardar y Mostrar ---
+ruta_html = os.path.join(BASE_DIR, 'mapa_3d_pobreza_interactivo.html')
+fig.write_html(ruta_html)
+print(f"✅ ¡Gráfico interactivo guardado en: {ruta_html}!")
+print("💡 Tip: Ve a tu Drive, descarga el archivo HTML y ábrelo en Google Chrome para máxima fluidez.")
+
+fig.show()
+import matplotlib.pyplot as plt
+import os
+
+# --- 1. Configurar la figura 3D ---
+fig = plt.figure(figsize=(14, 12))
+ax = fig.add_subplot(111, projection='3d')
+
+# --- 2. Separar las máscaras lógicas ---
+mask_np = df_plot_3d['Grupo'] == '1. No Pobre (Base)'
+mask_p = df_plot_3d['Grupo'] == '2. Pobre (Base)'
+mask_anom_np = df_plot_3d['Grupo'] == '3. Anómalo: No Pobre (Posible Vulnerable)'
+mask_anom_p = df_plot_3d['Grupo'] == '4. Anómalo: Pobre (Atípico/Extremo)'
+
+# --- 3. Graficar las capas (Ordenadas por profundidad visual) ---
+# Capa 1: No Pobres (Fondo)
+ax.scatter(df_plot_3d.loc[mask_np, 'PC1'], 
+           df_plot_3d.loc[mask_np, 'PC2'], 
+           df_plot_3d.loc[mask_np, 'PC3'], 
+           c='lightgray', s=15, alpha=0.2, label='No Pobre (Base)')
+
+# Capa 2: Pobres
+ax.scatter(df_plot_3d.loc[mask_p, 'PC1'], 
+           df_plot_3d.loc[mask_p, 'PC2'], 
+           df_plot_3d.loc[mask_p, 'PC3'], 
+           c='steelblue', s=15, alpha=0.3, label='Pobre (Base)')
+
+# Capa 3: Anomalías No Pobres (Vulnerables ocultos)
+ax.scatter(df_plot_3d.loc[mask_anom_np, 'PC1'], 
+           df_plot_3d.loc[mask_anom_np, 'PC2'], 
+           df_plot_3d.loc[mask_anom_np, 'PC3'], 
+           c='darkorange', s=80, alpha=0.9, edgecolors='black', linewidth=0.8,
+           label='Anómalo: Vulnerable Oculto')
+
+# Capa 4: Anomalías Pobres (Extrema / Atípica)
+ax.scatter(df_plot_3d.loc[mask_anom_p, 'PC1'], 
+           df_plot_3d.loc[mask_anom_p, 'PC2'], 
+           df_plot_3d.loc[mask_anom_p, 'PC3'], 
+           c='crimson', s=80, alpha=0.9, edgecolors='black', linewidth=0.8,
+           label='Anómalo: Pobreza Atípica')
+
+# --- 4. Formato y Ángulo de Cámara ---
+ax.set_title('Topología 3D de la Pobreza y Anomalías Estructurales', fontsize=16, pad=20)
+ax.set_xlabel(f'PC1 ({pca_3d.explained_variance_ratio_[0]:.1%} var)', fontsize=12)
+ax.set_ylabel(f'PC2 ({pca_3d.explained_variance_ratio_[1]:.1%} var)', fontsize=12)
+ax.set_zlabel(f'PC3 ({pca_3d.explained_variance_ratio_[2]:.1%} var)', fontsize=12)
+
+# Ajuste de la leyenda
+ax.legend(loc='upper right', bbox_to_anchor=(1.1, 0.9), markerscale=1.5, fontsize=11)
+
+# TIP: Modifica estos dos valores para "rotar" el gráfico
+# elev: Ángulo de elevación (arriba/abajo)
+# azim: Ángulo azimutal (giro izquierda/derecha)
+ax.view_init(elev=25., azim=45) 
+
+# --- 5. Guardar ---
+ruta_grafico_3d_estatico = os.path.join(BASE_DIR, 'mapa_espacial_3d_estatico.png')
+plt.savefig(ruta_grafico_3d_estatico, dpi=300, bbox_inches='tight')
+print(f"✅ Gráfico 3D estático guardado en: {ruta_grafico_3d_estatico}")
+
+plt.show()
+print('fin')
